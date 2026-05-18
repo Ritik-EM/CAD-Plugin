@@ -3,11 +3,12 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using AtlasCadPlugin.Auth;
+using AtlasCadPlugin.Forms;
 using Microsoft.Win32;
 using SolidWorks.Interop.sldworks;
-using SolidWorks.Interop.swpublished;
 using SolidWorks.Interop.swconst;
-using AtlasCadPlugin.Forms;
+using SolidWorks.Interop.swpublished;
 
 namespace AtlasCadPlugin
 {
@@ -19,27 +20,37 @@ namespace AtlasCadPlugin
         private ISldWorks _swApp;
         private ICommandManager _cmdManager;
         private AtlasApiClient _api;
+        private AuthService _auth;
 
         // Ribbon command IDs.
         private const int CmdIdPing = 0;
         private const int CmdIdUpload = 1;
         private const int CmdIdBrowse = 2;
         private const int CmdIdCheckin = 3;
-        private const int CmdIdSwitchUser = 4;
+        private const int CmdIdSignOut = 4;
 
         // Atlas backend URL. Set this to your Mac LAN IP if backend runs there.
         // For demo: edit and rebuild, or move to a config file later.
-        private const string AtlasBaseUrl = "http://192.168.1.100:8000";
+        private const string AtlasBaseUrl = "http://172.16.2.159:8000";
+
+        // Euler central auth service — issues the JWT that atlas-api validates.
+        private const string OctopusBaseUrl = "https://octopus.eulerlogistics.com";
 
         public bool ConnectToSW(object ThisSW, int Cookie)
         {
+            // S3 requires TLS 1.2+. .NET Framework defaults to TLS 1.0 which S3 rejects,
+            // causing "connection forcibly closed by remote host" on presigned-URL downloads.
+            System.Net.ServicePointManager.SecurityProtocol =
+                System.Net.SecurityProtocolType.Tls12 | System.Net.SecurityProtocolType.Tls13;
+
             _swApp = (ISldWorks)ThisSW;
             _addinCookie = Cookie;
             _swApp.SetAddinCallbackInfo2(0, this, _addinCookie);
 
             _api = new AtlasApiClient(AtlasBaseUrl);
+            _auth = new AuthService(OctopusBaseUrl);
 
-            EnsureIdentity();
+            EnsureAuthenticated();
 
             _cmdManager = _swApp.GetCommandManager(_addinCookie);
             AddRibbonButtons();
@@ -87,23 +98,35 @@ namespace AtlasCadPlugin
             g.AddCommandItem2("Check In", -1, "Upload current assembly as new version of checked-out item",
                 "Check In", 0, nameof(OnCheckinClicked), "", CmdIdCheckin, both);
 
-            g.AddCommandItem2("Switch Identity", -1, "Change which user the plugin acts as",
-                "Switch User", 0, nameof(OnSwitchUserClicked), "", CmdIdSwitchUser, both);
+            g.AddCommandItem2("Sign Out", -1, "Clear stored token and sign in as a different user",
+                "Sign Out", 0, nameof(OnSignOutClicked), "", CmdIdSignOut, both);
 
             g.HasToolbar = true;
             g.HasMenu = true;
             g.Activate();
         }
 
-        // ---- Identity stub (replace with real auth in M1) ----
+        // ---- Auth ----
 
-        private void EnsureIdentity()
+        /// <summary>
+        /// If no valid token is stored, opens the login dialog. User can cancel
+        /// — ribbon buttons will re-prompt on click via the UnauthorizedException
+        /// path in Run(). Called once at add-in startup as well.
+        /// </summary>
+        /// <returns>true if a valid token is present after this call.</returns>
+        private bool EnsureAuthenticated()
         {
-            if (!string.IsNullOrEmpty(IdentityStore.GetUserName())) return;
-            using (var dlg = new IdentityPromptForm(current: null))
+            var existing = TokenStore.Current();
+            if (existing != null && !existing.IsExpired) return true;
+
+            string preset = existing?.Email;
+            // Stale tokens shouldn't sit around; clearing avoids accidentally
+            // re-using an expired one if the user cancels the login dialog.
+            if (existing != null && existing.IsExpired) TokenStore.Clear();
+
+            using (var dlg = new LoginForm(_auth, preset))
             {
-                if (dlg.ShowDialog() == DialogResult.OK)
-                    IdentityStore.SetUserName(dlg.EnteredName);
+                return dlg.ShowDialog() == DialogResult.OK;
             }
         }
 
@@ -112,8 +135,9 @@ namespace AtlasCadPlugin
         public void OnPingClicked() => _ = Run(async () =>
         {
             string result = await _api.PingAsync();
-            string user = IdentityStore.GetUserName() ?? "(no identity)";
-            MessageBox.Show($"Identity: {user}\n\n{result}", "Atlas — Ping",
+            var who = TokenStore.Current();
+            string identity = who != null ? $"{who.DisplayName} <{who.Email}>" : "(not signed in)";
+            MessageBox.Show($"Signed in as: {identity}\n\n{result}", "Atlas — Ping",
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         });
 
@@ -145,6 +169,10 @@ namespace AtlasCadPlugin
                 {
                     form.ShowDialog();
                 }
+            }
+            catch (UnauthorizedException)
+            {
+                HandleUnauthorized();
             }
             catch (Exception ex)
             {
@@ -191,27 +219,36 @@ namespace AtlasCadPlugin
             );
         });
 
-        public void OnSwitchUserClicked()
+        public void OnSignOutClicked()
         {
-            using (var dlg = new IdentityPromptForm(current: IdentityStore.GetUserName()))
-            {
-                if (dlg.ShowDialog() == DialogResult.OK)
-                {
-                    IdentityStore.SetUserName(dlg.EnteredName);
-                    MessageBox.Show("Identity switched to: " + dlg.EnteredName, "Atlas",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-            }
+            var prev = TokenStore.Current();
+            TokenStore.Clear();
+            string who = prev?.Email ?? "(none)";
+            MessageBox.Show($"Signed out: {who}\n\nSign-in dialog will appear next.", "Atlas",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            EnsureAuthenticated();
         }
 
-        private static async Task Run(Func<Task> work)
+        private async Task Run(Func<Task> work)
         {
             try { await work(); }
+            catch (UnauthorizedException)
+            {
+                HandleUnauthorized();
+            }
             catch (Exception ex)
             {
                 MessageBox.Show("Atlas error:\n\n" + ex.Message, "Atlas",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        }
+
+        private void HandleUnauthorized()
+        {
+            TokenStore.Clear();
+            MessageBox.Show("Your session has expired. Please sign in again.",
+                "Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            EnsureAuthenticated();
         }
 
         // ---- COM registration ----

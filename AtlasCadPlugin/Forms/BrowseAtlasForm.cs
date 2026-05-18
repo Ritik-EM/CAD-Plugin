@@ -4,6 +4,7 @@ using System.Drawing;
 using System.IO;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using AtlasCadPlugin.Auth;
 using SolidWorks.Interop.sldworks;
 using SolidWorks.Interop.swconst;
 
@@ -204,7 +205,7 @@ namespace AtlasCadPlugin.Forms
         {
             var sel = SelectedAssembly();
             if (sel == null) return;
-            string me = IdentityStore.GetUserName();
+            string me = TokenStore.Current()?.Email;
             if (sel.locked_by != me)
             {
                 MessageBox.Show($"Only {sel.locked_by} can cancel this checkout.", "Atlas",

@@ -36,6 +36,7 @@
     <Reference Include="System.Core" />
     <Reference Include="System.Drawing" />
     <Reference Include="System.Net.Http" />
+    <Reference Include="System.Security" />
     <Reference Include="System.Windows.Forms" />
     <Reference Include="System.Xml" />
     <Reference Include="System.Xml.Linq" />
@@ -64,10 +65,11 @@
     <Compile Include="AtlasAddin.cs" />
     <Compile Include="AtlasApiClient.cs" />
     <Compile Include="AssemblyWalker.cs" />
+    <Compile Include="Auth\AuthService.cs" />
+    <Compile Include="Auth\TokenStore.cs" />
     <Compile Include="CheckoutTracker.cs" />
-    <Compile Include="IdentityStore.cs" />
     <Compile Include="Forms\BrowseAtlasForm.cs" />
-    <Compile Include="Forms\IdentityPromptForm.cs" />
+    <Compile Include="Forms\LoginForm.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

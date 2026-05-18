@@ -64,30 +64,21 @@ namespace AtlasCadPlugin
                 if (seenPaths.Contains(fullPath)) continue;
                 seenPaths.Add(fullPath);
 
-                string relativePath = MakeRelative(rootDir, fullPath);
-
                 result.Add(new AssemblyFileRef
                 {
                     FullPath = fullPath,
-                    RelativePath = relativePath,
+                    // Always use bare filename. SolidWorks-imported STEP assemblies
+                    // place children in %LOCALAPPDATA%\Temp\swx****\, which would
+                    // produce ".." path-traversal segments that break S3 presigned URLs.
+                    // SolidWorks resolves children by filename in the assembly's
+                    // directory on re-open, so flat layout works for our use case.
+                    RelativePath = Path.GetFileName(fullPath),
                     Filename = Path.GetFileName(fullPath),
                     IsRoot = false,
                 });
             }
 
             return result;
-        }
-
-        // .NET Framework 4.8 has no Path.GetRelativePath, so do it via Uri.
-        private static string MakeRelative(string fromDir, string toPath)
-        {
-            if (!fromDir.EndsWith(Path.DirectorySeparatorChar.ToString()))
-                fromDir += Path.DirectorySeparatorChar;
-            Uri fromUri = new Uri(fromDir);
-            Uri toUri = new Uri(toPath);
-            Uri relativeUri = fromUri.MakeRelativeUri(toUri);
-            string relative = Uri.UnescapeDataString(relativeUri.ToString());
-            return relative.Replace('/', Path.DirectorySeparatorChar);
         }
     }
 }

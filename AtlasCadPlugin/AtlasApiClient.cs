@@ -1,12 +1,24 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Threading.Tasks;
+using AtlasCadPlugin.Auth;
 using Newtonsoft.Json;
 
 namespace AtlasCadPlugin
 {
+    /// <summary>
+    /// Raised when atlas-api rejects the request with HTTP 401. The caller
+    /// (AtlasAddin.Run) catches this and re-prompts the user to sign in.
+    /// </summary>
+    public class UnauthorizedException : Exception
+    {
+        public UnauthorizedException(string message) : base(message) { }
+    }
+
     public class AssemblyDto
     {
         public string id;
@@ -48,8 +60,9 @@ namespace AtlasCadPlugin
 
     /// <summary>
     /// Wraps all HTTP calls to the atlas-api /api/v1/cad/* endpoints.
-    /// Reads the user's identity from IdentityStore and adds it as
-    /// the X-User-Name header on every request.
+    /// Attaches the JWT from TokenStore as Authorization: Bearer on every
+    /// request. On 401 throws UnauthorizedException so the caller can
+    /// prompt the user to sign in again.
     /// </summary>
     public class AtlasApiClient
     {
@@ -65,17 +78,30 @@ namespace AtlasCadPlugin
         private HttpRequestMessage NewRequest(HttpMethod method, string path)
         {
             var req = new HttpRequestMessage(method, $"{BaseUrl}{path}");
-            string user = IdentityStore.GetUserName();
-            if (!string.IsNullOrEmpty(user))
-                req.Headers.Add("X-User-Name", user);
+            var token = TokenStore.Current();
+            if (token != null && !string.IsNullOrEmpty(token.Token))
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
             return req;
+        }
+
+        private async Task<string> SendAsync(HttpRequestMessage req, string operation)
+        {
+            HttpResponseMessage resp = await _http.SendAsync(req);
+            string body = await resp.Content.ReadAsStringAsync();
+
+            if (resp.StatusCode == HttpStatusCode.Unauthorized)
+                throw new UnauthorizedException("Your session has expired. Please sign in again.");
+
+            if (!resp.IsSuccessStatusCode)
+                throw new Exception($"{operation} failed: {(int)resp.StatusCode} {body}");
+
+            return body;
         }
 
         public async Task<string> PingAsync()
         {
             var req = NewRequest(HttpMethod.Get, "/api/v1/cad/ping");
-            var resp = await _http.SendAsync(req);
-            return await resp.Content.ReadAsStringAsync();
+            return await SendAsync(req, "Ping");
         }
 
         public async Task<UploadResultDto> UploadAssemblyAsync(string name, List<AssemblyFileRef> tree)
@@ -84,36 +110,24 @@ namespace AtlasCadPlugin
             {
                 var req = NewRequest(HttpMethod.Post, "/api/v1/cad/assembly/upload");
                 req.Content = content;
-                var resp = await _http.SendAsync(req);
-                string body = await resp.Content.ReadAsStringAsync();
-                if (!resp.IsSuccessStatusCode)
-                    throw new Exception($"Upload failed: {(int)resp.StatusCode} {body}");
-
-                var envelope = JsonConvert.DeserializeObject<ApiEnvelope<UploadResultDto>>(body);
-                return envelope.data;
+                string body = await SendAsync(req, "Upload");
+                return JsonConvert.DeserializeObject<ApiEnvelope<UploadResultDto>>(body).data;
             }
         }
 
         public async Task<List<AssemblyDto>> ListAssembliesAsync()
         {
             var req = NewRequest(HttpMethod.Get, "/api/v1/cad/assembly");
-            var resp = await _http.SendAsync(req);
-            string body = await resp.Content.ReadAsStringAsync();
-            if (!resp.IsSuccessStatusCode)
-                throw new Exception($"List failed: {(int)resp.StatusCode} {body}");
-            var envelope = JsonConvert.DeserializeObject<ApiEnvelope<List<AssemblyDto>>>(body);
-            return envelope.data ?? new List<AssemblyDto>();
+            string body = await SendAsync(req, "List");
+            return JsonConvert.DeserializeObject<ApiEnvelope<List<AssemblyDto>>>(body).data
+                ?? new List<AssemblyDto>();
         }
 
         public async Task<CheckoutResultDto> CheckoutAsync(string assemblyId)
         {
             var req = NewRequest(HttpMethod.Post, $"/api/v1/cad/assembly/{assemblyId}/checkout");
-            var resp = await _http.SendAsync(req);
-            string body = await resp.Content.ReadAsStringAsync();
-            if (!resp.IsSuccessStatusCode)
-                throw new Exception($"Checkout failed: {(int)resp.StatusCode} {body}");
-            var envelope = JsonConvert.DeserializeObject<ApiEnvelope<CheckoutResultDto>>(body);
-            return envelope.data;
+            string body = await SendAsync(req, "Checkout");
+            return JsonConvert.DeserializeObject<ApiEnvelope<CheckoutResultDto>>(body).data;
         }
 
         public async Task<UploadResultDto> CheckinAsync(string assemblyId, List<AssemblyFileRef> tree, string comment)
@@ -122,29 +136,22 @@ namespace AtlasCadPlugin
             {
                 var req = NewRequest(HttpMethod.Post, $"/api/v1/cad/assembly/{assemblyId}/checkin");
                 req.Content = content;
-                var resp = await _http.SendAsync(req);
-                string body = await resp.Content.ReadAsStringAsync();
-                if (!resp.IsSuccessStatusCode)
-                    throw new Exception($"Check-in failed: {(int)resp.StatusCode} {body}");
-                var envelope = JsonConvert.DeserializeObject<ApiEnvelope<UploadResultDto>>(body);
-                return envelope.data;
+                string body = await SendAsync(req, "Check-in");
+                return JsonConvert.DeserializeObject<ApiEnvelope<UploadResultDto>>(body).data;
             }
         }
 
         public async Task CancelCheckoutAsync(string assemblyId)
         {
             var req = NewRequest(HttpMethod.Post, $"/api/v1/cad/assembly/{assemblyId}/cancel-checkout");
-            var resp = await _http.SendAsync(req);
-            if (!resp.IsSuccessStatusCode)
-            {
-                string body = await resp.Content.ReadAsStringAsync();
-                throw new Exception($"Cancel-checkout failed: {(int)resp.StatusCode} {body}");
-            }
+            await SendAsync(req, "Cancel-checkout");
         }
 
         public async Task DownloadFileAsync(string presignedUrl, string targetPath)
         {
-            // Presigned S3 URLs must NOT carry our X-User-Name header — use a clean request.
+            // Presigned S3 URLs are credential-embedded — they MUST NOT carry
+            // our Authorization header (S3 rejects requests with extra auth headers).
+            // Use a clean HttpRequestMessage with no Bearer token.
             var req = new HttpRequestMessage(HttpMethod.Get, presignedUrl);
             using (var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead))
             {
