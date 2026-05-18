@@ -67,9 +67,19 @@
     <Compile Include="AssemblyWalker.cs" />
     <Compile Include="Auth\AuthService.cs" />
     <Compile Include="Auth\TokenStore.cs" />
+    <Compile Include="AutoUpdater.cs" />
     <Compile Include="CheckoutTracker.cs" />
+    <Compile Include="CustomProperties.cs" />
+    <Compile Include="FileHashing.cs" />
+    <Compile Include="Forms\AssignPartNumbersForm.cs" />
     <Compile Include="Forms\BrowseAtlasForm.cs" />
+    <Compile Include="Forms\BrowsePartsForm.cs" />
+    <Compile Include="Forms\ConfirmRevisionBumpsForm.cs" />
     <Compile Include="Forms\LoginForm.cs" />
+    <Compile Include="Forms\ProgressForm.cs" />
+    <Compile Include="Forms\VersionHistoryForm.cs" />
+    <Compile Include="PartNumberParser.cs" />
+    <Compile Include="StepExporter.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -28,6 +30,7 @@ namespace AtlasCadPlugin
         private const int CmdIdBrowse = 2;
         private const int CmdIdCheckin = 3;
         private const int CmdIdSignOut = 4;
+        private const int CmdIdBrowseParts = 5;
 
         // Atlas backend URL. Set this to your Mac LAN IP if backend runs there.
         // For demo: edit and rebuild, or move to a config file later.
@@ -54,6 +57,10 @@ namespace AtlasCadPlugin
 
             _cmdManager = _swApp.GetCommandManager(_addinCookie);
             AddRibbonButtons();
+
+            // Fire-and-forget version check — never blocks add-in load.
+            _ = AutoUpdater.CheckAsync(_api);
+
             return true;
         }
 
@@ -94,6 +101,9 @@ namespace AtlasCadPlugin
 
             g.AddCommandItem2("Browse Atlas", -1, "Browse and check out assemblies",
                 "Browse", 0, nameof(OnBrowseClicked), "", CmdIdBrowse, both);
+
+            g.AddCommandItem2("Browse Parts", -1, "Search part_master_library and insert a part into the active assembly",
+                "Browse Parts", 0, nameof(OnBrowsePartsClicked), "", CmdIdBrowseParts, both);
 
             g.AddCommandItem2("Check In", -1, "Upload current assembly as new version of checked-out item",
                 "Check In", 0, nameof(OnCheckinClicked), "", CmdIdCheckin, both);
@@ -146,19 +156,73 @@ namespace AtlasCadPlugin
             IModelDoc2 doc = (IModelDoc2)_swApp.ActiveDoc;
             if (doc == null) { MessageBox.Show("Open an assembly first."); return; }
 
-            var tree = AssemblyWalker.Walk(doc);
             string assemblyName = Path.GetFileNameWithoutExtension(doc.GetPathName());
 
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            var result = await _api.UploadAssemblyAsync(assemblyName, tree);
-            sw.Stop();
+            using (var progress = new ProgressForm("Atlas — Upload"))
+            {
+                progress.Show(_swApp != null ? (IWin32Window)null : null);
+                try
+                {
+                    progress.SetPhase("Walking assembly tree…");
+                    var tree = AssemblyWalker.Walk(doc);
 
-            MessageBox.Show(
-                $"Uploaded {tree.Count} files in {sw.Elapsed.TotalSeconds:F1}s.\n\n" +
-                $"Assembly: {result.name}\nID: {result.assembly_id}\nVersion: {result.version_number}",
-                "Atlas — Upload",
-                MessageBoxButtons.OK, MessageBoxIcon.Information
-            );
+                    // Generate per-part STEP exports alongside native files so the
+                    // part_master_library gets portable geometry for downstream
+                    // consumers (atlas-ui viewer, suppliers without SolidWorks).
+                    string stepDir = Path.Combine(Path.GetTempPath(), "AtlasCadStep_" + Guid.NewGuid().ToString("N"));
+                    progress.SetPhase("Exporting STEP files…");
+                    var stepFiles = StepExporter.Export(_swApp, tree, stepDir);
+                    tree.AddRange(stepFiles);
+
+                    progress.SetPhase("Hashing files…", 0, tree.Count);
+                    int hashed = 0;
+                    System.Threading.Tasks.Parallel.ForEach(tree, f =>
+                    {
+                        f.Sha256 = FileHashing.Sha256Hex(f.FullPath);
+                        int n = System.Threading.Interlocked.Increment(ref hashed);
+                        progress.SetPhase($"Hashing files… {n}/{tree.Count}", n, tree.Count);
+                    });
+
+                    progress.SetPhase("Verifying part numbers…");
+                    var candidates = tree.Where(t => !string.IsNullOrEmpty(t.PartNumber))
+                                         .Select(t => t.PartNumber).Distinct().ToList();
+                    var lookup = candidates.Count > 0
+                        ? await _api.LookupPartNumbersAsync(candidates)
+                        : new PartLookupResult { found = new List<string>(), missing = new List<string>() };
+
+                    var foundSet = new HashSet<string>(lookup.found ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+                    bool allResolved = tree.All(t =>
+                        !string.IsNullOrEmpty(t.PartNumber) && foundSet.Contains(t.PartNumber));
+
+                    if (!allResolved)
+                    {
+                        progress.Hide();
+                        using (var dlg = new AssignPartNumbersForm(_api, tree, lookup))
+                        {
+                            if (dlg.ShowDialog() != DialogResult.OK) return;
+                        }
+                        progress.Show();
+                    }
+
+                    progress.SetPhase($"Uploading {tree.Count} files…");
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    var result = await _api.UploadAssemblyAsync(assemblyName, tree);
+                    sw.Stop();
+                    progress.Done();
+
+                    MessageBox.Show(
+                        $"Uploaded {tree.Count} files (incl. {stepFiles.Count} STEP exports) in {sw.Elapsed.TotalSeconds:F1}s.\n\n" +
+                        $"Assembly: {result.name}\nID: {result.assembly_id}\nVersion: {result.version_number}",
+                        "Atlas — Upload",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information
+                    );
+                    StepExporter.Cleanup(stepDir);
+                }
+                finally
+                {
+                    if (progress.Visible) progress.Close();
+                }
+            }
         });
 
         public void OnBrowseClicked()
@@ -177,6 +241,23 @@ namespace AtlasCadPlugin
             catch (Exception ex)
             {
                 MessageBox.Show("Browse failed:\n\n" + ex, "Atlas", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        public void OnBrowsePartsClicked()
+        {
+            try
+            {
+                using (var form = new BrowsePartsForm(_api, _swApp))
+                {
+                    form.ShowDialog();
+                }
+            }
+            catch (UnauthorizedException) { HandleUnauthorized(); }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Browse Parts failed:\n\n" + ex, "Atlas",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -203,20 +284,60 @@ namespace AtlasCadPlugin
 
             var tree = AssemblyWalker.Walk(doc);
 
-            string comment = Microsoft.VisualBasic.Interaction.InputBox(
-                "Optional comment for this version:", "Atlas — Check In", "");
+            // Per-part STEP exports — same rationale as upload.
+            string stepDir = Path.Combine(Path.GetTempPath(), "AtlasCadStep_" + Guid.NewGuid().ToString("N"));
+            var stepFiles = StepExporter.Export(_swApp, tree, stepDir);
+            tree.AddRange(stepFiles);
+
+            // Parallel-hash so a 38-part assembly doesn't make the user wait
+            // ~10s on a serial loop.
+            System.Threading.Tasks.Parallel.ForEach(tree, f =>
+            {
+                f.Sha256 = FileHashing.Sha256Hex(f.FullPath);
+            });
+
+            // Preview: backend tells us what changed; designer picks which
+            // changes warrant a revision bump.
+            var preview = await _api.CheckinPreviewAsync(assemblyId, tree);
+
+            List<RevisionBump> bumps;
+            string comment;
+            if ((preview.changed?.Count ?? 0) == 0 && (preview.added?.Count ?? 0) == 0)
+            {
+                // Nothing changed and nothing added — auto-confirm with empty bumps.
+                if (MessageBox.Show(
+                        "No file changes detected since checkout. Check in anyway?",
+                        "Atlas — Check In",
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                    return;
+                bumps = new List<RevisionBump>();
+                comment = Microsoft.VisualBasic.Interaction.InputBox(
+                    "Optional comment:", "Atlas — Check In", "") ?? "";
+            }
+            else
+            {
+                using (var dlg = new ConfirmRevisionBumpsForm(preview))
+                {
+                    if (dlg.ShowDialog() != DialogResult.OK) return;
+                    bumps = dlg.RevisionBumps;
+                    comment = dlg.Comment;
+                }
+            }
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
-            var result = await _api.CheckinAsync(assemblyId, tree, comment ?? "");
+            var result = await _api.CheckinAsync(assemblyId, tree, bumps, comment);
             sw.Stop();
 
             CheckoutTracker.Untrack(rootPath);
 
             MessageBox.Show(
-                $"Checked in v{result.version_number} ({tree.Count} files, {sw.Elapsed.TotalSeconds:F1}s).",
+                $"Checked in v{result.version_number} ({tree.Count} files incl. " +
+                $"{stepFiles.Count} STEP exports, {bumps.Count} revisions bumped, " +
+                $"{sw.Elapsed.TotalSeconds:F1}s).",
                 "Atlas — Check In",
                 MessageBoxButtons.OK, MessageBoxIcon.Information
             );
+            StepExporter.Cleanup(stepDir);
         });
 
         public void OnSignOutClicked()

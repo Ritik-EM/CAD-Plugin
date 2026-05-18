@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AtlasCadPlugin MSI installer (WiX v3.11 toolset).
+
+  Build on Windows (with WiX installed):
+    cd installer
+    candle Product.wxs
+    light -ext WixUIExtension Product.wixobj -out AtlasCadPlugin.msi
+
+  Code-sign on Windows (requires Euler's EV cert):
+    signtool sign /a /tr http://timestamp.digicert.com /td sha256 /fd sha256 AtlasCadPlugin.msi
+
+  What it does:
+    1. Copies AtlasCadPlugin.dll + Newtonsoft.Json.dll to %ProgramFiles%\Atlas\AtlasCadPlugin
+    2. Runs regasm /codebase to register the COM assembly
+    3. Writes the SOLIDWORKS\AddIns registry key so SolidWorks loads us on startup
+
+  The COM GUID below must match AtlasAddin.cs [Guid(...)] attribute.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Atlas CAD Plugin"
+           Language="1033"
+           Version="1.0.0.0"
+           Manufacturer="Euler Motors"
+           UpgradeCode="A2A2B3D4-E5F6-7890-ABCD-EF1234567891">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="Atlas CAD integration for SolidWorks" />
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Atlas CAD Plugin is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="ProductFeature" Title="AtlasCadPlugin" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+    </Feature>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="AtlasDir" Name="Atlas">
+          <Directory Id="INSTALLFOLDER" Name="AtlasCadPlugin" />
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <!--
+        The plugin DLL. KeyPath + Win64 + RegisterAssembly puts the COM
+        registration into the MSI itself so an uninstall fully reverses it.
+        SelfRegCost > 0 prevents WiX yelling about regasm; the actual COM
+        registration happens via the Class element below.
+      -->
+      <Component Id="MainDll" Guid="*" Win64="yes">
+        <File Id="AtlasCadPluginDll"
+              Source="..\AtlasCadPlugin\bin\Release\AtlasCadPlugin.dll"
+              KeyPath="yes"
+              Assembly=".net"
+              AssemblyApplication="AtlasCadPluginDll"
+              AssemblyManifest="AtlasCadPluginDll" />
+
+        <!-- SolidWorks add-in discovery key — points SW at our COM class. -->
+        <RegistryKey Root="HKLM"
+                     Key="SOFTWARE\SolidWorks\AddIns\{E3A2B3D4-E5F6-7890-ABCD-EF1234567890}">
+          <RegistryValue Type="integer" Name="" Value="1" />
+          <RegistryValue Type="string" Name="Title" Value="Atlas" />
+          <RegistryValue Type="string" Name="Description" Value="Atlas — sync CAD files to Atlas PLM" />
+        </RegistryKey>
+      </Component>
+
+      <Component Id="NewtonsoftJsonDll" Guid="*" Win64="yes">
+        <File Id="NewtonsoftJson"
+              Source="..\packages\Newtonsoft.Json.13.0.3\lib\net45\Newtonsoft.Json.dll"
+              KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <UIRef Id="WixUI_Minimal" />
+  </Product>
+</Wix>

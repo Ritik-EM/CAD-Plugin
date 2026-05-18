@@ -24,6 +24,7 @@ namespace AtlasCadPlugin.Forms
         private Button _refreshButton;
         private Button _checkoutButton;
         private Button _cancelCheckoutButton;
+        private Button _historyButton;
         private Button _closeButton;
         private Label _statusLabel;
 
@@ -41,13 +42,13 @@ namespace AtlasCadPlugin.Forms
 
             BuildLayout();
 
-            Load += async (s, e) => await Refresh();
+            Load += async (s, e) => await ReloadAsync();
         }
 
         private void BuildLayout()
         {
             _refreshButton = new Button { Text = "Refresh", Location = new Point(10, 10), Width = 90 };
-            _refreshButton.Click += async (s, e) => await Refresh();
+            _refreshButton.Click += async (s, e) => await ReloadAsync();
             Controls.Add(_refreshButton);
 
             _checkoutButton = new Button { Text = "Check Out", Location = new Point(110, 10), Width = 110 };
@@ -57,6 +58,10 @@ namespace AtlasCadPlugin.Forms
             _cancelCheckoutButton = new Button { Text = "Cancel Checkout", Location = new Point(230, 10), Width = 130 };
             _cancelCheckoutButton.Click += async (s, e) => await CancelCheckoutSelected();
             Controls.Add(_cancelCheckoutButton);
+
+            _historyButton = new Button { Text = "History…", Location = new Point(370, 10), Width = 90 };
+            _historyButton.Click += (s, e) => OpenHistory();
+            Controls.Add(_historyButton);
 
             _closeButton = new Button { Text = "Close", Location = new Point(780, 10), Width = 90 };
             _closeButton.Click += (s, e) => Close();
@@ -90,7 +95,7 @@ namespace AtlasCadPlugin.Forms
             Controls.Add(_grid);
         }
 
-        private async Task Refresh()
+        private async Task ReloadAsync()
         {
             try
             {
@@ -187,7 +192,7 @@ namespace AtlasCadPlugin.Forms
                 );
 
                 _statusLabel.Text = $"Checked out v{result.version_number} of {sel.name}. Make changes and click Check In.";
-                await Refresh();
+                await ReloadAsync();
                 Close();
             }
             catch (Exception ex)
@@ -199,6 +204,22 @@ namespace AtlasCadPlugin.Forms
             {
                 Enabled = true;
             }
+        }
+
+        private void OpenHistory()
+        {
+            var sel = SelectedAssembly();
+            if (sel == null)
+            {
+                MessageBox.Show("Pick an assembly first.", "Atlas", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            using (var f = new VersionHistoryForm(_api, sel.id, sel.name))
+            {
+                f.ShowDialog();
+            }
+            // Refresh in case Set-as-Active changed current_version.
+            _ = ReloadAsync();
         }
 
         private async Task CancelCheckoutSelected()
@@ -216,7 +237,7 @@ namespace AtlasCadPlugin.Forms
             {
                 await _api.CancelCheckoutAsync(sel.id);
                 _statusLabel.Text = "Checkout cancelled.";
-                await Refresh();
+                await ReloadAsync();
             }
             catch (Exception ex)
             {

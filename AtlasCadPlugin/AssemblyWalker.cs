@@ -12,6 +12,13 @@ namespace AtlasCadPlugin
         public string RelativePath;
         public string Filename;
         public bool IsRoot;
+        // Parsed from filename when the bare name matches the part_master_library
+        // scheme (10 alphanumeric chars). May be edited by the user via
+        // AssignPartNumbersForm before upload. Null means "unknown".
+        public string PartNumber;
+        // SHA-256 of file bytes, hex lowercase. Computed during upload for
+        // integrity verification on the backend.
+        public string Sha256;
     }
 
     /// <summary>
@@ -34,16 +41,19 @@ namespace AtlasCadPlugin
             if (string.IsNullOrEmpty(rootPath))
                 throw new InvalidOperationException("Assembly has not been saved to disk yet — save it first");
 
-            string rootDir = Path.GetDirectoryName(rootPath);
             var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var result = new List<AssemblyFileRef>();
 
+            string rootFilename = Path.GetFileName(rootPath);
             result.Add(new AssemblyFileRef
             {
                 FullPath = rootPath,
-                RelativePath = Path.GetFileName(rootPath),
-                Filename = Path.GetFileName(rootPath),
+                RelativePath = rootFilename,
+                Filename = rootFilename,
                 IsRoot = true,
+                // Prefer the in-file PART_NUMBER custom property when present —
+                // it's the canonical identifier. Filename parsing is fallback.
+                PartNumber = ResolvePartNumber(doc, rootFilename),
             });
             seenPaths.Add(rootPath);
 
@@ -64,6 +74,8 @@ namespace AtlasCadPlugin
                 if (seenPaths.Contains(fullPath)) continue;
                 seenPaths.Add(fullPath);
 
+                string childFilename = Path.GetFileName(fullPath);
+                IModelDoc2 compDoc = c.GetModelDoc2() as IModelDoc2;
                 result.Add(new AssemblyFileRef
                 {
                     FullPath = fullPath,
@@ -72,13 +84,22 @@ namespace AtlasCadPlugin
                     // produce ".." path-traversal segments that break S3 presigned URLs.
                     // SolidWorks resolves children by filename in the assembly's
                     // directory on re-open, so flat layout works for our use case.
-                    RelativePath = Path.GetFileName(fullPath),
-                    Filename = Path.GetFileName(fullPath),
+                    RelativePath = childFilename,
+                    Filename = childFilename,
                     IsRoot = false,
+                    PartNumber = ResolvePartNumber(compDoc, childFilename),
                 });
             }
 
             return result;
+        }
+
+        private static string ResolvePartNumber(IModelDoc2 doc, string filename)
+        {
+            string fromProperty = CustomProperties.Read(doc, CustomProperties.PartNumberKey);
+            if (!string.IsNullOrWhiteSpace(fromProperty) && PartNumberParser.LooksValid(fromProperty))
+                return fromProperty.Trim().ToUpperInvariant();
+            return PartNumberParser.ParseOrNull(filename);
         }
     }
 }
