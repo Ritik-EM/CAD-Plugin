@@ -16,22 +16,41 @@ A `.NET Framework 4.8` add-in DLL with these ribbon buttons:
 
 ## Repository layout
 
+Multi-CAD architecture: one shared library plus three thin per-CAD plugins. Each plugin implements a single `ICadAdapter` interface; everything else (auth, API client, all dialogs, business logic) lives in `AtlasCadCore` and is reused.
+
 ```
 atlas-cad-plugin/
-├── AtlasCadPlugin.sln
-└── AtlasCadPlugin/
-    ├── AtlasCadPlugin.csproj
-    ├── packages.config              ← Newtonsoft.Json
-    ├── AtlasAddin.cs                ← ISwAddin, ribbon, click handlers
-    ├── AtlasApiClient.cs            ← all HTTP calls to atlas-api
-    ├── AssemblyWalker.cs            ← walks SW assembly tree
-    ├── IdentityStore.cs             ← %APPDATA%\AtlasCad\identity.txt
-    ├── CheckoutTracker.cs           ← maps local file → assembly_id
-    ├── Forms/
-    │   ├── IdentityPromptForm.cs
-    │   └── BrowseAtlasForm.cs
-    └── Properties/AssemblyInfo.cs
+├── AtlasCadPlugin.sln               (4 projects)
+│
+├── AtlasCadCore/                    ← shared, no CAD references
+│   ├── Adapter/                       ICadAdapter, AssemblyFileRef, CadDocument
+│   ├── Auth/                          TokenStore (DPAPI), AuthService (octopus JWT)
+│   ├── ApiClient/                     AtlasApiClient + DTOs
+│   ├── Forms/                         all WinForms dialogs (CAD-neutral via ICadAdapter)
+│   └── Utility/                       PartNumberParser, FileHashing, CheckoutTracker, AutoUpdater
+│
+├── AtlasSolidWorksAddin/            ← thin SW plugin
+│   ├── SolidWorksAdapter.cs           ICadAdapter via IModelDoc2 / AssemblyDoc
+│   └── SolidWorksAddin.cs             ISwAddin, ribbon, COM registration
+│
+├── AtlasCatiaAddin/                 ← thin CATIA V5 plugin
+│   ├── CatiaAdapter.cs                ICadAdapter via INFITF / MECMOD / ProductStructureTypeLib
+│   ├── CatiaAddin.cs                  COM-visible add-in class
+│   └── Atlas.CATScript                CATIA startup macro
+│
+├── AtlasNxAddin/                    ← thin NX plugin
+│   ├── NxAdapter.cs                   ICadAdapter via NXOpen.* (Part / Component / ComponentAssembly)
+│   ├── NxAddin.cs                     Menu_Startup entry point
+│   └── atlas.men                      NX menu file
+│
+└── installer/
+    ├── Product.wxs                    WiX MSI for SolidWorks
+    ├── build.cmd                      builds + signs the SW MSI
+    ├── CatiaInstaller.cmd             copies + regasms CATIA DLL
+    └── NxInstaller.cmd                copies NX DLL + menu to %UGII_USER_DIR%\startup\
 ```
+
+Adding a new CAD package is roughly: new project, new csproj with ProjectReference to AtlasCadCore, one Adapter.cs (~300 lines) implementing ICadAdapter, one Addin.cs (~150 lines) of host-specific menu wiring. ~2 days of focused work plus access to that CAD for testing.
 
 ## Development workflow
 

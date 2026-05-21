@@ -53,12 +53,12 @@
         registration happens via the Class element below.
       -->
       <Component Id="MainDll" Guid="*" Win64="yes">
-        <File Id="AtlasCadPluginDll"
-              Source="..\AtlasCadPlugin\bin\Release\AtlasCadPlugin.dll"
+        <File Id="AtlasSolidWorksAddinDll"
+              Source="..\AtlasSolidWorksAddin\bin\Release\AtlasSolidWorksAddin.dll"
               KeyPath="yes"
               Assembly=".net"
-              AssemblyApplication="AtlasCadPluginDll"
-              AssemblyManifest="AtlasCadPluginDll" />
+              AssemblyApplication="AtlasSolidWorksAddinDll"
+              AssemblyManifest="AtlasSolidWorksAddinDll" />
 
         <!-- SolidWorks add-in discovery key — points SW at our COM class. -->
         <RegistryKey Root="HKLM"
@@ -67,6 +67,12 @@
           <RegistryValue Type="string" Name="Title" Value="Atlas" />
           <RegistryValue Type="string" Name="Description" Value="Atlas — sync CAD files to Atlas PLM" />
         </RegistryKey>
+      </Component>
+
+      <Component Id="CoreDll" Guid="*" Win64="yes">
+        <File Id="AtlasCadCoreDll"
+              Source="..\AtlasSolidWorksAddin\bin\Release\AtlasCadCore.dll"
+              KeyPath="yes" />
       </Component>
 
       <Component Id="NewtonsoftJsonDll" Guid="*" Win64="yes">

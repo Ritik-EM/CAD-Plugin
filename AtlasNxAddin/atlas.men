@@ -1,0 +1,34 @@
+! Atlas NX menu file.
+!
+! Drop into %UGII_USER_DIR%\startup\. NX reads .men files from this path
+! at startup and wires the named MENU_BUTTON entries to action callbacks
+! registered via NxAddin.Menu_Startup().
+!
+! Reference: NX Customisation Guide, "Menubar files".
+
+VERSION 120
+
+EDIT UG_GATEWAY_MAIN_MENUBAR
+
+BEFORE UG_HELP
+    CASCADE_BUTTON UG_ATLAS_MENU
+    LABEL Atlas
+
+MENU UG_ATLAS_MENU
+    BUTTON UG_ATLAS_PING
+        LABEL Ping Atlas
+        ACTIONS ATLAS_PING_ACT
+    BUTTON UG_ATLAS_UPLOAD
+        LABEL Upload to Atlas
+        ACTIONS ATLAS_UPLOAD_ACT
+    BUTTON UG_ATLAS_BROWSE
+        LABEL Browse Part Master Library
+        ACTIONS ATLAS_BROWSE_ACT
+    BUTTON UG_ATLAS_CHECKIN
+        LABEL Check In
+        ACTIONS ATLAS_CHECKIN_ACT
+    SEPARATOR
+    BUTTON UG_ATLAS_SIGNOUT
+        LABEL Sign Out
+        ACTIONS ATLAS_SIGNOUT_ACT
+END_OF_MENU

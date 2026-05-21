@@ -1,0 +1,305 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using System.Windows.Forms;
+using AtlasCadCore.Adapter;
+using AtlasCadCore.ApiClient;
+using AtlasCadCore.Utility;
+
+namespace AtlasCadCore.Forms
+{
+    /// <summary>
+    /// Orchestrator for the part-master check-in flow. Triggered from the
+    /// ribbon "Check In" button (wired in P7.10).
+    ///   1. Identify the checked-out root part via CheckoutTracker.
+    ///   2. Walk the assembly tree (with parent links from the adapter).
+    ///   3. Show CheckinPropagationForm — user ticks modified parts; dialog
+    ///      computes ancestor propagation live.
+    ///   4. Build CheckinTreeEntry payload + multipart files.
+    ///   5. POST /cad/part-master/{root}/checkin — backend bumps revisions
+    ///      leaves-first, attaches uploaded files, releases the lock.
+    ///   6. Untrack the local path and show a summary of the bumps.
+    /// </summary>
+    public static class CheckinFlow
+    {
+        public static async Task RunAsync(AtlasApiClient api, ICadAdapter adapter)
+        {
+            CadDocument doc = adapter.GetActiveDocument();
+            if (doc == null)
+            {
+                MessageBox.Show("Open the checked-out file first.", "Atlas — Check In",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            string rootPartNumber = CheckoutTracker.ResolvePartNumberForPath(doc.FullPath);
+            if (string.IsNullOrEmpty(rootPartNumber))
+            {
+                var tracked = CheckoutTracker.Snapshot();
+                string trackedSummary = tracked.Count == 0
+                    ? "(nothing currently checked out)"
+                    : string.Join("\n", tracked.Select(kv => $"  {kv.Value}  ←  {kv.Key}"));
+                MessageBox.Show(
+                    "This file isn't tracked as a checked-out Atlas part.\n\n" +
+                    $"Active doc:\n  {doc.FullPath ?? "(unsaved)"}\n\n" +
+                    $"Tracked checkouts:\n{trackedSummary}\n\n" +
+                    "Use Browse Part Master Library → Check Out first, edit, then Check In.",
+                    "Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            string releaseType = PartNumberParser.ReleaseTypeFromPartNumber(rootPartNumber);
+            if (releaseType == null)
+            {
+                MessageBox.Show(
+                    $"Couldn't derive release_type from {rootPartNumber}. " +
+                    "The checked-out part_number doesn't follow the 10-char format.",
+                    "Atlas", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            using (var progress = new ProgressForm("Atlas — Check In"))
+            {
+                progress.Show();
+                string stepDir = null;
+                try
+                {
+                    adapter.SaveDocument(doc);
+
+                    progress.SetPhase("Walking assembly tree…");
+                    var native = adapter.WalkAssembly(doc) ?? new List<AssemblyFileRef>();
+                    if (native.Count == 0)
+                    {
+                        Beep();
+                        MessageBox.Show("Tree is empty — nothing to check in.", "Atlas",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    // Export a STEP per native file — each revision needs
+                    // its own current .stp so atlas-ui's 3D viewer reflects
+                    // the latest geometry for every part, not just the root.
+                    // Adapter uses the already-loaded IModelDoc2 captured in
+                    // WalkAssembly to skip OpenDoc6, and reports per-file
+                    // progress so the user can see which child is exporting.
+                    stepDir = Path.Combine(Path.GetTempPath(), "AtlasCadStep_" + Guid.NewGuid().ToString("N"));
+                    progress.SetPhase("Exporting STEP files…", 0, native.Count);
+                    var steps = adapter.ExportStep(
+                        doc, native, stepDir,
+                        progress: (cur, total, filename) =>
+                            progress.SetPhase($"Exporting STEP {cur}/{total}: {filename}", cur, total)
+                    ) ?? new List<AssemblyFileRef>();
+
+                    progress.SetPhase("Hashing files…", 0, native.Count + steps.Count);
+                    int hashed = 0;
+                    var all = native.Concat(steps).ToList();
+                    System.Threading.Tasks.Parallel.ForEach(all, f =>
+                    {
+                        f.Sha256 = FileHashing.Sha256Hex(f.FullPath);
+                        int n = System.Threading.Interlocked.Increment(ref hashed);
+                        progress.SetPhase($"Hashing files… {n}/{all.Count}", n, all.Count);
+                    });
+
+                    // Per-part bundle: native + optional STP + depth in tree.
+                    var entries = BuildPartEntries(native, steps, rootPartNumber);
+
+                    // Empty tree usually means every file's filename failed
+                    // PartNumberParser. Surface this clearly rather than
+                    // sending an empty tree to the backend (which would just
+                    // return "Tree is empty").
+                    if (entries.Count == 0)
+                    {
+                        progress.Hide();
+                        MessageBox.Show(
+                            "No parts in this assembly have recognisable Atlas part_numbers.\n\n" +
+                            "Filenames must start with a 10-character part_number " +
+                            "(letters and digits, e.g. \"AN5T01040A_door_rh.sldasm\").\n\n" +
+                            "If your files don't match this convention, set the " +
+                            "PART_NUMBER custom property on each component in SW " +
+                            "to its atlas part_number.",
+                            "Atlas — Check In",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    // Verify the resolved root part_number actually appears
+                    // in the walked tree. If not, CheckoutTracker pointed at
+                    // a different file than what's currently open — usually
+                    // a stale entry from a previous session.
+                    if (!entries.Any(e => string.Equals(e.PartNumber, rootPartNumber, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        progress.Hide();
+                        string treePns = string.Join(", ", entries.Take(5).Select(e => e.PartNumber));
+                        if (entries.Count > 5) treePns += $", … ({entries.Count - 5} more)";
+                        MessageBox.Show(
+                            $"The currently open assembly doesn't match the checked-out part.\n\n" +
+                            $"Checkout tracker says:  {rootPartNumber}\n" +
+                            $"Tree root in SolidWorks: {entries.FirstOrDefault(e => string.IsNullOrEmpty(e.ParentPartNumber))?.PartNumber ?? "(none)"}\n" +
+                            $"Tree contents: {treePns}\n\n" +
+                            "Either open the correct file for this checkout, or go to " +
+                            "Browse Part Master Library → select " + rootPartNumber +
+                            " → Cancel Checkout to clear the stale lock and retry.",
+                            "Atlas — Check In",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    progress.Hide();
+                    List<string> changed;
+                    string comment;
+                    string otp;
+                    using (var dlg = new CheckinPropagationForm(
+                        rootPartNumber, releaseType,
+                        entries.Select(e => new CheckinPropagationForm.TreeRow
+                        {
+                            PartNumber = e.PartNumber,
+                            ParentPartNumber = e.ParentPartNumber,
+                            Filename = e.NativeFilename,
+                            Depth = e.Depth,
+                        }).ToList(),
+                        api))
+                    {
+                        if (dlg.ShowDialog() != DialogResult.OK) return;
+                        changed = dlg.ChangedPartNumbers ?? new List<string>();
+                        comment = dlg.Comment;
+                        otp = dlg.Otp;
+                    }
+                    progress.Show();
+
+                    progress.SetPhase("Uploading + bumping revisions…");
+                    var result = await api.CheckinAsync(
+                        rootPartNumber: rootPartNumber,
+                        tree: entries.Select(e => (object)e.ToTreeJson()),
+                        releaseType: releaseType,
+                        changed: changed,
+                        comment: comment,
+                        otp: otp,
+                        filePaths: entries.SelectMany(e => e.AllPaths()));
+
+                    progress.Done();
+
+                    CheckoutTracker.Untrack(doc.FullPath);
+                    MessageBox.Show(BuildSummary(result), "Atlas — Check In",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (UnauthorizedException)
+                {
+                    throw;  // bubble to the addin-level Run() wrapper
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Check-in failed:\n\n" + ex.Message,
+                        "Atlas", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                finally
+                {
+                    if (progress.Visible) progress.Close();
+                    try { if (stepDir != null) Directory.Delete(stepDir, recursive: true); } catch { }
+                }
+            }
+        }
+
+        private static void Beep() => System.Media.SystemSounds.Beep.Play();
+
+        private static List<PartEntry> BuildPartEntries(
+            List<AssemblyFileRef> native, List<AssemblyFileRef> steps, string rootPartNumber)
+        {
+            var stepByPart = steps
+                .Where(s => !string.IsNullOrEmpty(s.PartNumber))
+                .GroupBy(s => s.PartNumber)
+                .ToDictionary(g => g.Key, g => g.First());
+
+            // Index native by part_number first so depth can be computed.
+            var nativeByPart = new Dictionary<string, AssemblyFileRef>(StringComparer.OrdinalIgnoreCase);
+            foreach (var n in native)
+            {
+                if (string.IsNullOrEmpty(n.PartNumber)) continue;
+                if (!nativeByPart.ContainsKey(n.PartNumber))
+                    nativeByPart[n.PartNumber] = n;
+            }
+
+            int DepthOf(string pn)
+            {
+                int d = 0;
+                string cur = pn;
+                while (true)
+                {
+                    if (!nativeByPart.TryGetValue(cur, out var r)) break;
+                    if (string.IsNullOrEmpty(r.ParentPartNumber)) break;
+                    d++;
+                    cur = r.ParentPartNumber;
+                    if (d > 64) break;  // safety against cycles
+                }
+                return d;
+            }
+
+            var result = new List<PartEntry>();
+            foreach (var kv in nativeByPart)
+            {
+                var n = kv.Value;
+                stepByPart.TryGetValue(n.PartNumber, out var step);
+                result.Add(new PartEntry
+                {
+                    PartNumber = n.PartNumber,
+                    ParentPartNumber = n.ParentPartNumber,
+                    NativeFilename = n.Filename,
+                    NativePath = n.FullPath,
+                    StepFilename = step?.Filename,
+                    StepPath = step?.FullPath,
+                    Sha256 = n.Sha256,
+                    Depth = DepthOf(n.PartNumber),
+                });
+            }
+            return result;
+        }
+
+        private static string BuildSummary(CheckinResultDto result)
+        {
+            var sb = new StringBuilder();
+            sb.AppendLine($"Check-in committed for {result.root_part_number} ({result.release_type}).");
+            sb.AppendLine();
+            int n = result.bumped?.Count ?? 0;
+            if (n == 0)
+            {
+                sb.AppendLine("No revisions were bumped (no parts marked as modified).");
+            }
+            else
+            {
+                sb.AppendLine($"{n} part(s) revision-bumped:");
+                foreach (var b in result.bumped)
+                    sb.AppendLine($"  {b.old_part_number}  →  {b.new_part_number}");
+            }
+            return sb.ToString();
+        }
+
+        private class PartEntry
+        {
+            public string PartNumber;
+            public string ParentPartNumber;
+            public string NativeFilename;
+            public string NativePath;
+            public string StepFilename;
+            public string StepPath;
+            public string Sha256;
+            public int Depth;
+
+            public object ToTreeJson() => new
+            {
+                part_number = PartNumber,
+                parent_part_number = ParentPartNumber,
+                filename = NativeFilename,
+                step_filename = StepFilename,
+                sha256 = Sha256,
+            };
+
+            public IEnumerable<string> AllPaths()
+            {
+                if (!string.IsNullOrEmpty(NativePath)) yield return NativePath;
+                if (!string.IsNullOrEmpty(StepPath)) yield return StepPath;
+            }
+        }
+    }
+}
