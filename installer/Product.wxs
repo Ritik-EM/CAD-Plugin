@@ -60,10 +60,13 @@
               AssemblyApplication="AtlasSolidWorksAddinDll"
               AssemblyManifest="AtlasSolidWorksAddinDll" />
 
-        <!-- SolidWorks add-in discovery key — points SW at our COM class. -->
+        <!-- SolidWorks add-in discovery key — points SW at our COM class.
+             The unnamed REG_DWORD = 1 is the "enabled by default" flag SW
+             looks for; in WiX you express the default (unnamed) value by
+             omitting the Name attribute, not by setting Name="". -->
         <RegistryKey Root="HKLM"
                      Key="SOFTWARE\SolidWorks\AddIns\{E3A2B3D4-E5F6-7890-ABCD-EF1234567890}">
-          <RegistryValue Type="integer" Name="" Value="1" />
+          <RegistryValue Type="integer" Value="1" />
           <RegistryValue Type="string" Name="Title" Value="Atlas" />
           <RegistryValue Type="string" Name="Description" Value="Atlas — sync CAD files to Atlas PLM" />
         </RegistryKey>
