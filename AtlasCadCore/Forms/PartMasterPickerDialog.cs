@@ -57,7 +57,6 @@ namespace AtlasCadCore.Forms
             top.Controls.Add(_searchBox);
             _debounce = new System.Windows.Forms.Timer { Interval = 350 };
             _debounce.Tick += (s, e) => { _debounce.Stop(); _ = ReloadAsync(); };
-            Controls.Add(top);
 
             _grid = new DataGridView
             {
@@ -76,7 +75,6 @@ namespace AtlasCadCore.Forms
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Release", Name = "rt", Width = 110 });
             _grid.SelectionChanged += (s, e) => UpdateOkButton();
             _grid.CellDoubleClick += (s, e) => { if (_okBtn.Enabled) { _okBtn.PerformClick(); } };
-            Controls.Add(_grid);
 
             var bottom = new Panel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(8) };
             _okBtn = new Button { Text = "Use This Part", Width = 130, Height = 28, DialogResult = DialogResult.None, Anchor = AnchorStyles.Right | AnchorStyles.Bottom, Enabled = false };
@@ -96,7 +94,11 @@ namespace AtlasCadCore.Forms
             bottom.Controls.Add(cancel);
             AcceptButton = _okBtn;
             CancelButton = cancel;
+
+            // Docked edges first, Fill last (see MissingChildUploadForm note).
+            Controls.Add(top);
             Controls.Add(bottom);
+            Controls.Add(_grid);
         }
 
         private void UpdateOkButton()

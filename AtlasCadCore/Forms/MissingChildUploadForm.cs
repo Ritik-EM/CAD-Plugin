@@ -65,7 +65,6 @@ namespace AtlasCadCore.Forms
                        "available). For each one, click Browse… to attach the local .sldprt/.sldasm. " +
                        "Leave a row blank to skip that part.",
             };
-            Controls.Add(hdr);
 
             _grid = new DataGridView
             {
@@ -78,8 +77,8 @@ namespace AtlasCadCore.Forms
                 ReadOnly = false,
                 EditMode = DataGridViewEditMode.EditOnEnter,
             };
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Part Number", Name = "pn", Width = 130, ReadOnly = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename (expected by SW)", Name = "filename", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Part Number", Name = "pn", Width = 140, ReadOnly = true });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename (expected by SW)", Name = "filename", Width = 280, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Picked local file", Name = "local", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
             var btnCol = new DataGridViewButtonColumn { HeaderText = "", Name = "browse", Text = "Browse…", UseColumnTextForButtonValue = true, Width = 90 };
             _grid.Columns.Add(btnCol);
@@ -99,7 +98,6 @@ namespace AtlasCadCore.Forms
                     _grid.Rows[e.RowIndex].Cells["local"].Value = Path.GetFileName(ofd.FileName);
                 }
             };
-            Controls.Add(_grid);
 
             var bottom = new Panel { Dock = DockStyle.Bottom, Height = 130, Padding = new Padding(10) };
 
@@ -161,7 +159,15 @@ namespace AtlasCadCore.Forms
 
             AcceptButton = ok;
             CancelButton = cancel;
+
+            // WinForms docks siblings in the order they're added — a Fill
+            // child added before a Bottom sibling will overlap it, hiding
+            // the top row of the grid behind the header. Add docked edges
+            // (Top, Bottom) FIRST, then Fill LAST so it occupies only the
+            // remaining middle space.
+            Controls.Add(hdr);
             Controls.Add(bottom);
+            Controls.Add(_grid);
 
             UpdateOtpUi();
         }

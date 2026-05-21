@@ -51,7 +51,6 @@ namespace AtlasCadCore.Forms
             _selectNoneBtn = new Button { Text = "Select None", Location = new Point(202, 8), Width = 100 };
             _selectNoneBtn.Click += (s, e) => SetAll(false);
             top.Controls.Add(_selectNoneBtn);
-            Controls.Add(top);
 
             _grid = new DataGridView
             {
@@ -71,7 +70,6 @@ namespace AtlasCadCore.Forms
             {
                 if (_grid.IsCurrentCellDirty) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
             };
-            Controls.Add(_grid);
 
             var bottom = new Panel { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(8) };
             _statusLabel = new Label { Location = new Point(8, 14), AutoSize = true, Text = "Loading…", ForeColor = Color.DimGray };
@@ -96,7 +94,12 @@ namespace AtlasCadCore.Forms
             close.Location = new Point(bottom.Width - 110, 10);
             bottom.Controls.Add(close);
             CancelButton = close;
+
+            // Docked edges first, Fill last so the grid's top row isn't
+            // clipped under the toolbar (Top) sibling.
+            Controls.Add(top);
             Controls.Add(bottom);
+            Controls.Add(_grid);
         }
 
         private async Task ReloadAsync()

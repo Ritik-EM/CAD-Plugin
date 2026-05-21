@@ -45,7 +45,8 @@ namespace AtlasCadCore.Forms
                 Text = $"{_missing.Count} part(s) don't exist in part_master_library yet. " +
                        "Fill in the metadata below — Atlas will mint a fresh part_number for each.",
             };
-            Controls.Add(hdr);
+            // (hdr / defaults / _grid / btnPanel all added below in the
+            // correct order — Top + Bottom siblings first, Fill grid LAST.)
 
             // Defaults panel
             var defaults = new GroupBox { Dock = DockStyle.Top, Height = 96, Text = "Defaults (apply to empty cells)", Padding = new Padding(8) };
@@ -108,7 +109,8 @@ namespace AtlasCadCore.Forms
             };
             rtCol.Items.AddRange(new object[] { "PROTO", "PRODUCTION", "ALTERNATE_PART" });
             _grid.Columns.Add(rtCol);
-            Controls.Add(_grid);
+            // _grid will be added LAST (after btnPanel below) so its top
+            // row doesn't get clipped under the docked defaults panel.
 
             // Buttons
             var btnPanel = new Panel { Dock = DockStyle.Bottom, Height = 44 };
@@ -117,7 +119,11 @@ namespace AtlasCadCore.Forms
             var cancel = new Button { Text = "Cancel", Location = new Point(btnPanel.Width - 140, 10), Anchor = AnchorStyles.Right, Width = 100, DialogResult = DialogResult.Cancel };
             btnPanel.Controls.Add(ok);
             btnPanel.Controls.Add(cancel);
+            // Docked edges first (Top hdr, Top defaults, Bottom btnPanel),
+            // then the Fill grid LAST so it occupies only the middle space.
+            Controls.Add(hdr);
             Controls.Add(btnPanel);
+            Controls.Add(_grid);
             AcceptButton = ok;
             CancelButton = cancel;
         }
