@@ -21,7 +21,7 @@
   <Product Id="*"
            Name="Atlas CAD Plugin"
            Language="1033"
-           Version="1.0.0.0"
+           Version="2.0.0.0"
            Manufacturer="Euler Motors"
            UpgradeCode="A2A2B3D4-E5F6-7890-ABCD-EF1234567891">
 
