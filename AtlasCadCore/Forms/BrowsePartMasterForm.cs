@@ -530,6 +530,39 @@ namespace AtlasCadCore.Forms
                 var openedDoc = _adapter.GetActiveDocument();
                 await ResolveFromAtlasFlow.RunAsync(_api, _adapter, openedDoc, silentIfNothingMissing: true);
 
+                // Stash SHA-256 of every file in the now-resolved assembly
+                // so Check In can auto-tick the rows whose bytes changed.
+                // Re-fetch the active doc after Resolve in case it reloaded.
+                try
+                {
+                    SetBusy(true, "Recording baseline file hashes…");
+                    var docForHash = _adapter.GetActiveDocument() ?? openedDoc;
+                    var baseline = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    if (docForHash != null && docForHash.IsAssembly)
+                    {
+                        var tree = _adapter.WalkAssembly(docForHash) ?? new List<AssemblyFileRef>();
+                        foreach (var f in tree)
+                        {
+                            if (string.IsNullOrEmpty(f.PartNumber)) continue;
+                            if (string.IsNullOrEmpty(f.FullPath) || !File.Exists(f.FullPath)) continue;
+                            // First write wins — duplicate component refs
+                            // for the same part_number must share bytes.
+                            if (baseline.ContainsKey(f.PartNumber)) continue;
+                            baseline[f.PartNumber] = FileHashing.Sha256Hex(f.FullPath);
+                        }
+                    }
+                    else if (!string.IsNullOrEmpty(picked.Path) && File.Exists(picked.Path))
+                    {
+                        baseline[pn] = FileHashing.Sha256Hex(picked.Path);
+                    }
+                    FileHashStash.Store(pn, baseline);
+                }
+                catch
+                {
+                    // Hashing failure is non-fatal: Check In just falls back
+                    // to the existing "user hand-ticks everything" flow.
+                }
+
                 _statusLabel.Text = $"Checked out {pn} (locked by {lockInfo.locked_by}).";
                 MessageBox.Show(
                     $"Checked out {pn}.\n\n" +

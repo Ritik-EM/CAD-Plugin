@@ -61,12 +61,18 @@ namespace AtlasCadCore.Forms
             StartPosition = FormStartPosition.CenterParent;
             MinimumSize = new Size(780, 420);
 
+            int preTickCount = _rows.Count(r => r.PreCheckedAsChanged);
+            string preTickHint = preTickCount == 0
+                ? "(No baseline hashes — tick the parts you modified manually.)"
+                : $"{preTickCount} part(s) auto-ticked — their bytes changed vs the checked-out " +
+                  "baseline. Un-tick / add ticks as needed; parent assemblies will be revision-bumped " +
+                  "automatically.";
+
             var hdr = new Label
             {
-                Dock = DockStyle.Top, Height = 56, Padding = new Padding(10, 8, 10, 0),
+                Dock = DockStyle.Top, Height = 72, Padding = new Padding(10, 8, 10, 0),
                 Text = $"Check in: {_rootPartNumber}   (release_type: {_releaseType})\n\n" +
-                       "Tick the parts you modified. Every parent assembly that contains a modified " +
-                       "part will also be revision-bumped automatically.",
+                       preTickHint,
             };
             Controls.Add(hdr);
 

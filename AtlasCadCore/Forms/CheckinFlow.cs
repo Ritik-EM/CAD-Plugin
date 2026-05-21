@@ -187,6 +187,20 @@ namespace AtlasCadCore.Forms
                         return;
                     }
 
+                    // Pre-tick "Modified" for parts whose current sha256
+                    // differs from the baseline captured at Check Out. The
+                    // baseline is keyed by root part_number in FileHashStash;
+                    // if nothing is stashed (e.g. checked out before this
+                    // feature shipped), we just fall back to all-unticked.
+                    var baseline = FileHashStash.Get(rootPartNumber)
+                                   ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    bool HasBaselineChanged(PartEntry e)
+                    {
+                        if (!baseline.TryGetValue(e.PartNumber, out var oldSha)) return false;
+                        if (string.IsNullOrEmpty(e.Sha256) || string.IsNullOrEmpty(oldSha)) return false;
+                        return !string.Equals(oldSha, e.Sha256, StringComparison.OrdinalIgnoreCase);
+                    }
+
                     progress.Hide();
                     List<string> changed;
                     string comment;
@@ -199,6 +213,7 @@ namespace AtlasCadCore.Forms
                             ParentPartNumber = e.ParentPartNumber,
                             Filename = e.NativeFilename,
                             Depth = e.Depth,
+                            PreCheckedAsChanged = HasBaselineChanged(e),
                         }).ToList(),
                         api))
                     {
@@ -222,6 +237,10 @@ namespace AtlasCadCore.Forms
                     progress.Done();
 
                     CheckoutTracker.Untrack(doc.FullPath);
+                    // After a successful check-in the bumped revisions get
+                    // fresh part_numbers and the local files are stale, so
+                    // the baseline hashes are no longer meaningful.
+                    FileHashStash.Clear(rootPartNumber);
                     MessageBox.Show(BuildSummary(result), "Atlas — Check In",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
