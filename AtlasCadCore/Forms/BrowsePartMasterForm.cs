@@ -135,12 +135,20 @@ namespace AtlasCadCore.Forms
                 MultiSelect = false,
                 AutoGenerateColumns = false,
                 RowHeadersVisible = false,
+                // Pin row + header heights explicitly. On some SW Inspection
+                // add-in configurations the default AutoSize mode collapsed
+                // rows to 0 px, leaving the grid looking empty even though
+                // data was loaded. Explicit heights side-step that.
+                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+                ColumnHeadersHeight = 28,
             };
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Part No.", Name = "part_number", Width = 120 });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Description", Name = "description", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Major/Minor", Name = "groups", Width = 100 });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Latest Rev", Name = "latest_rev", Width = 110 });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Formats", Name = "formats", Width = 130 });
+            _grid.RowTemplate.Height = 26;
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Part No.", Name = "part_number", Width = 130 });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Description", Name = "description", Width = 240 });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Major/Minor", Name = "groups", Width = 140 });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Latest Rev", Name = "latest_rev", Width = 100 });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Formats", Name = "formats", Width = 110 });
             _grid.SelectionChanged += (s, e) => OnSelectionChanged();
 
             // Pager — docked bottom so it stays put when the panel resizes.
@@ -225,11 +233,16 @@ namespace AtlasCadCore.Forms
 
             split.Panel2.Controls.Add(detailRoot);
 
-            Controls.Add(split);
-
             // Status bar
             _statusLabel = new Label { Dock = DockStyle.Bottom, Height = 22, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0), Text = "Ready." };
+
+            // Form-level docking: Top + Bottom siblings added BEFORE the
+            // Fill child so the SplitContainer occupies only the middle
+            // space. Adding Fill before Bottom can leave the grid's top
+            // row clipped (the same bug we fixed in the inner panels).
+            // topPanel was added earlier; statusLabel + split go here.
             Controls.Add(_statusLabel);
+            Controls.Add(split);
         }
 
         // ---- Data loading ----
@@ -258,6 +271,14 @@ namespace AtlasCadCore.Forms
                         $"{doc.major_group}/{doc.minor_group}",
                         latest?.part_number?.Substring(Math.Max(0, latest.part_number.Length - 2)) ?? "—",
                         FormatBadges(latest));
+                }
+                // Force a layout + repaint pass — without this the rows
+                // sometimes don't appear until the user clicks the grid.
+                _grid.PerformLayout();
+                _grid.Refresh();
+                if (_grid.Rows.Count > 0)
+                {
+                    _grid.CurrentCell = _grid.Rows[0].Cells[0];
                 }
 
                 _pageLabel.Text = $"Page {_page} / {_totalPages} ({page.total} total)";
