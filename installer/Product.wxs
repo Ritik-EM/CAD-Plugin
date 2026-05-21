@@ -28,6 +28,7 @@
     <Package InstallerVersion="500"
              Compressed="yes"
              InstallScope="perMachine"
+             Platform="x64"
              Description="Atlas CAD integration for SolidWorks" />
 
     <MajorUpgrade DowngradeErrorMessage="A newer version of Atlas CAD Plugin is already installed." />
