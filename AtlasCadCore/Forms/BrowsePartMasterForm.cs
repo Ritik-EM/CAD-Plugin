@@ -437,6 +437,14 @@ namespace AtlasCadCore.Forms
                 CheckoutTracker.Track(picked.Path, pn);
                 _adapter.OpenDocument(picked.Path);
 
+                // Resolve every child reference from atlas — never use the
+                // local file system. Anything atlas can't supply with a
+                // native is presented in MissingChildUploadForm for the
+                // user to attach a local file.
+                SetBusy(true, "Resolving child parts from atlas…");
+                var openedDoc = _adapter.GetActiveDocument();
+                await ResolveFromAtlasFlow.RunAsync(_api, _adapter, openedDoc, silentIfNothingMissing: true);
+
                 _statusLabel.Text = $"Checked out {pn} (locked by {lockInfo.locked_by}).";
                 MessageBox.Show(
                     $"Checked out {pn}.\n\n" +
@@ -444,6 +452,10 @@ namespace AtlasCadCore.Forms
                     "Check In on the ribbon.",
                     "Atlas — Check Out",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                // Browse dialog has done its job — close it so the user can
+                // focus on the SW window.
+                this.BeginInvoke(new Action(() => this.Close()));
             }
             catch (Exception ex)
             {

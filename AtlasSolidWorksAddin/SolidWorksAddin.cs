@@ -39,7 +39,7 @@ namespace AtlasCadPlugin.SolidWorks
         private const int CmdIdResolve = 4;
         private const int CmdIdSignOut = 5;
 
-        private const string AtlasBaseUrl = "http://172.16.2.138:8000";
+        private const string AtlasBaseUrl = "http://192.168.1.39:8000";
         private const string OctopusBaseUrl = "https://octopus.eulerlogistics.com";
 
         public bool ConnectToSW(object ThisSW, int Cookie)

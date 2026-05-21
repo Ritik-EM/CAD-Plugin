@@ -128,12 +128,24 @@ namespace AtlasCadCore.ApiClient
         /// First-time upload. `tree` is a flat list of UploadTreeEntry payload
         /// objects (anonymous types are fine — they get JSON-serialised) and
         /// `filePaths` is the set of local files referenced by the tree.
+        ///
+        /// `releaseNewRevision` (default false) attaches each uploaded file
+        /// to the existing active revision of its part_number. When true,
+        /// the backend mints a fresh revision per entry before attaching —
+        /// OTP must be supplied in that case.
         /// </summary>
         public async Task<UploadResultDto> UploadPartMasterAsync(
-            IEnumerable<object> tree, IEnumerable<string> filePaths)
+            IEnumerable<object> tree, IEnumerable<string> filePaths,
+            bool releaseNewRevision = false, string otp = null)
         {
             using (var content = BuildTreeMultipart(tree, filePaths))
             {
+                if (releaseNewRevision)
+                {
+                    content.Add(new StringContent("true"), "release_new_revision");
+                    if (!string.IsNullOrEmpty(otp))
+                        content.Add(new StringContent(otp), "otp");
+                }
                 var req = NewRequest(HttpMethod.Post, "/api/v1/cad/part-master/upload");
                 req.Content = content;
                 string body = await SendAsync(req, "Upload to part-master");
