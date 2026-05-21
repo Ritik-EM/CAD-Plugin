@@ -27,5 +27,12 @@ namespace AtlasCadCore.Adapter
         // already-loaded document instead of paying OpenDoc6 cost again.
         // Null when the document isn't open (e.g. suppressed components).
         public object NativeHandle;
+
+        // Non-null = this entry SHOULDN'T be uploaded but is included so the
+        // check-in flow can surface "N components dropped from the tree" with
+        // a reason the user can act on (suppress, fix path, set PART_NUMBER).
+        // Empty/null means the entry is healthy.
+        // Values: "suppressed", "missing-file", "no-path", "no-part-number".
+        public string SkipReason;
     }
 }

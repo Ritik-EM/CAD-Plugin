@@ -108,36 +108,65 @@ namespace AtlasCadPlugin.SolidWorks
             object[] components = (object[])parentAsm.GetComponents(true);
             if (components == null) return;
 
+            // Keep every component as an entry. Set SkipReason for the ones
+            // that can't be uploaded, so the check-in flow can surface
+            // "N components excluded — here's why" instead of silently
+            // omitting them and confusing the user.
             foreach (object comp in components)
             {
                 Component2 c = comp as Component2;
                 if (c == null) continue;
-                if (c.IsSuppressed()) continue;
 
                 string fullPath = c.GetPathName();
-                if (string.IsNullOrEmpty(fullPath)) continue;
-                if (!File.Exists(fullPath)) continue;
-                if (!seenPaths.Add(fullPath)) continue;
+                string childFilename = string.IsNullOrEmpty(fullPath) ? null : Path.GetFileName(fullPath);
+                bool suppressed = false;
+                try { suppressed = c.IsSuppressed(); } catch { }
 
-                string childFilename = Path.GetFileName(fullPath);
-                IModelDoc2 compDoc = c.GetModelDoc2() as IModelDoc2;
+                string skipReason = null;
+                if (suppressed) skipReason = "suppressed";
+                else if (string.IsNullOrEmpty(fullPath)) skipReason = "no-path";
+                else if (!File.Exists(fullPath)) skipReason = "missing-file";
+
+                // De-dupe by path only when we have one. Suppressed components
+                // and ones with no path are reported per-instance.
+                if (skipReason == null && !seenPaths.Add(fullPath)) continue;
+
+                IModelDoc2 compDoc = null;
+                try { compDoc = c.GetModelDoc2() as IModelDoc2; } catch { }
                 string childPn = ResolvePartNumber(compDoc, childFilename);
+                if (skipReason == null && string.IsNullOrEmpty(childPn))
+                    skipReason = "no-part-number";
+
+                // Use the displayed component name as a fallback Filename so
+                // dropped components show up as something recognisable in
+                // the "components excluded" panel.
+                string displayName = childFilename;
+                if (string.IsNullOrEmpty(displayName))
+                {
+                    try { displayName = c.Name2; } catch { }
+                    if (string.IsNullOrEmpty(displayName)) displayName = "(unnamed component)";
+                }
+
                 result.Add(new AssemblyFileRef
                 {
                     FullPath = fullPath,
                     // Bare filename — STEP-imported assemblies store children in
                     // %LOCALAPPDATA%\Temp\swx****\ which produces ".." path-traversal
                     // segments that break S3 presigned URL signatures.
-                    RelativePath = childFilename,
-                    Filename = childFilename,
+                    RelativePath = displayName,
+                    Filename = displayName,
                     IsRoot = false,
                     PartNumber = childPn,
                     ParentPartNumber = parentPn,
                     NativeHandle = compDoc,
+                    SkipReason = skipReason,
                 });
 
-                if (compDoc != null && compDoc.GetType() == (int)swDocumentTypes_e.swDocASSEMBLY)
+                if (skipReason == null && compDoc != null
+                    && compDoc.GetType() == (int)swDocumentTypes_e.swDocASSEMBLY)
+                {
                     WalkChildren((AssemblyDoc)compDoc, childPn, seenPaths, result);
+                }
             }
         }
 

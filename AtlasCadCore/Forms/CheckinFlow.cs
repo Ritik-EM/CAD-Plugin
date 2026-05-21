@@ -119,6 +119,48 @@ namespace AtlasCadCore.Forms
                         return;
                     }
 
+                    // Surface components the adapter dropped (suppressed,
+                    // missing on disk, no path, or no resolvable part_number)
+                    // before we silently exclude them from the check-in tree.
+                    // Silently dropping was hiding the parts a user had actually
+                    // edited from the propagation grid.
+                    var dropped = native.Where(n => !string.IsNullOrEmpty(n.SkipReason)).ToList();
+                    if (dropped.Count > 0)
+                    {
+                        progress.Hide();
+                        var msg = new StringBuilder();
+                        msg.AppendLine($"{dropped.Count} component(s) in this assembly can't be checked in:");
+                        msg.AppendLine();
+                        foreach (var d in dropped.Take(20))
+                        {
+                            msg.AppendLine($"  • {d.Filename}");
+                            msg.AppendLine($"      reason: {d.SkipReason}");
+                        }
+                        if (dropped.Count > 20)
+                            msg.AppendLine($"  … {dropped.Count - 20} more");
+                        msg.AppendLine();
+                        msg.AppendLine("Fixes by reason:");
+                        msg.AppendLine("  suppressed     — unsuppress in SW and try again.");
+                        msg.AppendLine("  missing-file   — repath the component (the .sldprt isn't on disk).");
+                        msg.AppendLine("  no-path        — component is virtual/in-place; save it as a real file first.");
+                        msg.AppendLine("  no-part-number — set the PART_NUMBER custom property on the part, or rename the file");
+                        msg.AppendLine("                   so it starts with a 10-char Atlas part_number (e.g. AN5T00980A_...).");
+                        msg.AppendLine();
+                        msg.AppendLine("Continue check-in anyway? Healthy components will still be processed.");
+                        var resp = MessageBox.Show(msg.ToString(),
+                            "Atlas — Check In", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                        if (resp != DialogResult.Yes) return;
+                        progress.Show();
+                        native = native.Where(n => string.IsNullOrEmpty(n.SkipReason)).ToList();
+                    }
+                    if (native.Count == 0)
+                    {
+                        Beep();
+                        MessageBox.Show("Nothing left to check in after excluding dropped components.",
+                            "Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
                     // Export a STEP per native file — each revision needs
                     // its own current .stp so atlas-ui's 3D viewer reflects
                     // the latest geometry for every part, not just the root.

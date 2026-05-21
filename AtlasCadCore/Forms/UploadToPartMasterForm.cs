@@ -56,6 +56,12 @@ namespace AtlasCadCore.Forms
                     {
                         progress.SetPhase("Walking assembly tree…");
                         native = adapter.WalkAssembly(doc) ?? new List<AssemblyFileRef>();
+                        // Drop suppressed / missing-file / no-path entries —
+                        // they're surfaced by WalkAssembly so Check In can
+                        // warn about them, but Upload silently skips them
+                        // to preserve the existing behaviour of "upload what
+                        // we have, ignore the unfit instances".
+                        native = native.Where(n => string.IsNullOrEmpty(n.SkipReason)).ToList();
                     }
                     else
                     {
