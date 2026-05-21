@@ -123,11 +123,12 @@ namespace AtlasCadCore.Forms
             var cancel = new Button { Text = "Cancel", Location = new Point(btnPanel.Width - 140, 10), Anchor = AnchorStyles.Right, Width = 100, DialogResult = DialogResult.Cancel };
             btnPanel.Controls.Add(ok);
             btnPanel.Controls.Add(cancel);
-            // Docked edges first (Top hdr, Top defaults, Bottom btnPanel),
-            // then the Fill grid LAST so it occupies only the middle space.
+            // Fill grid sent to back of z-order so docked edges (hdr,
+            // defaults, btnPanel) carve out their strips first.
             Controls.Add(hdr);
             Controls.Add(btnPanel);
             Controls.Add(_grid);
+            _grid.SendToBack();
             AcceptButton = ok;
             CancelButton = cancel;
         }

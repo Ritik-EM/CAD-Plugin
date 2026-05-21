@@ -99,10 +99,12 @@ namespace AtlasCadCore.Forms
             AcceptButton = _okBtn;
             CancelButton = cancel;
 
-            // Docked edges first, Fill last (see MissingChildUploadForm note).
+            // Fill is sent to back of z-order so the layout engine docks
+            // it LAST — edges (top + bottom) carve their strips first.
             Controls.Add(top);
             Controls.Add(bottom);
             Controls.Add(_grid);
+            _grid.SendToBack();
         }
 
         private void UpdateOkButton()

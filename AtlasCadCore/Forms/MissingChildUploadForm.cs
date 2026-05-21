@@ -166,14 +166,15 @@ namespace AtlasCadCore.Forms
             AcceptButton = ok;
             CancelButton = cancel;
 
-            // WinForms docks siblings in the order they're added — a Fill
-            // child added before a Bottom sibling will overlap it, hiding
-            // the top row of the grid behind the header. Add docked edges
-            // (Top, Bottom) FIRST, then Fill LAST so it occupies only the
-            // remaining middle space.
+            // Empirically reliable WinForms idiom: add the Fill control,
+            // then SendToBack it. That puts Fill at the bottom of the
+            // z-order so the layout engine docks it LAST — meaning the
+            // edge-docked siblings (hdr, bottom) actually carve their
+            // strips out instead of overlapping the Fill area.
             Controls.Add(hdr);
             Controls.Add(bottom);
             Controls.Add(_grid);
+            _grid.SendToBack();
 
             UpdateOtpUi();
         }

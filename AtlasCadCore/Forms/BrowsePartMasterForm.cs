@@ -236,13 +236,23 @@ namespace AtlasCadCore.Forms
             // Status bar
             _statusLabel = new Label { Dock = DockStyle.Bottom, Height = 22, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0), Text = "Ready." };
 
-            // Form-level docking: Top + Bottom siblings added BEFORE the
-            // Fill child so the SplitContainer occupies only the middle
-            // space. Adding Fill before Bottom can leave the grid's top
-            // row clipped (the same bug we fixed in the inner panels).
-            // topPanel was added earlier; statusLabel + split go here.
-            Controls.Add(_statusLabel);
+            // WinForms docked-sibling layout: docked controls are processed
+            // in *addition order* — first-added gets first claim on its
+            // edge, then the next, and so on. So edges (Top + Bottom)
+            // must be added FIRST and Fill LAST when they're going onto
+            // the same parent — that way edges grab their strip first
+            // and Fill gets only what's left.
+            //
+            // ⚠️ But this form was misbehaving with that pattern: the
+            // SplitContainer (Fill) was claiming the whole form area
+            // with topPanel + statusLabel drawn on top, hiding the grid's
+            // column headers and the pager. The reliable workaround is
+            // to SendToBack the Fill after adding everything — that
+            // puts it at the back of the z-order so the docked edges
+            // genuinely carve their space out instead of overlapping.
             Controls.Add(split);
+            Controls.Add(_statusLabel);
+            split.SendToBack();
         }
 
         // ---- Data loading ----

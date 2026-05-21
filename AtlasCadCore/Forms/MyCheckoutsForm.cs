@@ -99,11 +99,13 @@ namespace AtlasCadCore.Forms
             bottom.Controls.Add(close);
             CancelButton = close;
 
-            // Docked edges first, Fill last so the grid's top row isn't
-            // clipped under the toolbar (Top) sibling.
+            // Fill grid sent to back of z-order — see MissingChildUploadForm
+            // note. Without this the grid's top + bottom rows are clipped
+            // under the docked toolbar / bottom sibling.
             Controls.Add(top);
             Controls.Add(bottom);
             Controls.Add(_grid);
+            _grid.SendToBack();
         }
 
         private async Task ReloadAsync()
