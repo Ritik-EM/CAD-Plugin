@@ -62,7 +62,11 @@ namespace AtlasCadCore.Forms
                 AutoGenerateColumns = false,
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 EditMode = DataGridViewEditMode.EditOnEnter,
+                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+                ColumnHeadersHeight = 28,
             };
+            _grid.RowTemplate.Height = 26;
             _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "", Name = "sel", Width = 40 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Part Number", Name = "pn", Width = 140, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Locked At", Name = "lockedAt", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
@@ -115,6 +119,9 @@ namespace AtlasCadCore.Forms
                 {
                     _grid.Rows.Add(false, c.part_number, c.locked_at ?? "");
                 }
+                _grid.PerformLayout();
+                _grid.Refresh();
+                if (_grid.Rows.Count > 0) _grid.CurrentCell = _grid.Rows[0].Cells["pn"];
                 _statusLabel.Text = _items.Count == 0
                     ? "No active checkouts."
                     : $"{_items.Count} active checkout(s).";

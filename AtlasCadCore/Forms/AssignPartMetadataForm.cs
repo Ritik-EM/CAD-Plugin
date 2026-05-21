@@ -93,7 +93,11 @@ namespace AtlasCadCore.Forms
                 AutoGenerateColumns = false,
                 SelectionMode = DataGridViewSelectionMode.CellSelect,
                 EditMode = DataGridViewEditMode.EditOnKeystrokeOrF2,
+                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+                ColumnHeadersHeight = 28,
             };
+            _grid.RowTemplate.Height = 26;
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Detected PN", Name = "detected", Width = 120, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename", Name = "filename", Width = 160, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Description", Name = "description", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
@@ -138,6 +142,9 @@ namespace AtlasCadCore.Forms
                     m.detected_description ?? "",
                     "", "", "", "", "", "PROTO");
             }
+            _grid.PerformLayout();
+            _grid.Refresh();
+            if (_grid.Rows.Count > 0) _grid.CurrentCell = _grid.Rows[0].Cells["detected"];
         }
 
         private void ApplyDefaults()

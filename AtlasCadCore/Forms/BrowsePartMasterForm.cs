@@ -261,6 +261,13 @@ namespace AtlasCadCore.Forms
                 _totalPages = Math.Max(1, page.pages);
                 _page = Math.Min(Math.Max(1, page.page), _totalPages);
 
+                // Preserve search-box focus across the reload — the user
+                // is likely still typing. Setting CurrentCell below would
+                // otherwise move keyboard focus into the grid.
+                bool restoreSearchFocus = _searchBox.Focused;
+                int caret = _searchBox.SelectionStart;
+                int selLen = _searchBox.SelectionLength;
+
                 _grid.Rows.Clear();
                 foreach (var doc in _currentItems)
                 {
@@ -279,6 +286,13 @@ namespace AtlasCadCore.Forms
                 if (_grid.Rows.Count > 0)
                 {
                     _grid.CurrentCell = _grid.Rows[0].Cells[0];
+                }
+
+                if (restoreSearchFocus)
+                {
+                    _searchBox.Focus();
+                    _searchBox.SelectionStart = caret;
+                    _searchBox.SelectionLength = selLen;
                 }
 
                 _pageLabel.Text = $"Page {_page} / {_totalPages} ({page.total} total)";
@@ -779,8 +793,11 @@ namespace AtlasCadCore.Forms
             UseWaitCursor = busy;
             if (text != null) _statusLabel.Text = text;
             _refreshBtn.Enabled = !busy;
-            _releaseTypeCombo.Enabled = !busy;
-            _searchBox.Enabled = !busy;
+            // Deliberately leave _searchBox and _releaseTypeCombo enabled —
+            // disabling the search box during a background reload steals
+            // keyboard focus and forces the user to click back into it
+            // before they can type the next letter. The 350 ms debounce
+            // timer is enough to prevent a request-per-keystroke flood.
         }
 
         private void Beep(string text)

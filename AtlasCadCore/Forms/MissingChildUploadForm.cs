@@ -76,7 +76,13 @@ namespace AtlasCadCore.Forms
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 ReadOnly = false,
                 EditMode = DataGridViewEditMode.EditOnEnter,
+                // Pin row + header heights — default AutoSize sometimes
+                // collapses rows to 0 px under SW's UI host.
+                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+                ColumnHeadersHeight = 28,
             };
+            _grid.RowTemplate.Height = 28;
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Part Number", Name = "pn", Width = 140, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename (expected by SW)", Name = "filename", Width = 280, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Picked local file", Name = "local", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
@@ -187,6 +193,14 @@ namespace AtlasCadCore.Forms
             foreach (var r in _rows)
             {
                 _grid.Rows.Add(r.PartNumber, r.OriginalFilename, "", null);
+            }
+            // Force the rows to paint immediately — without this they
+            // sometimes don't render until the user clicks the grid.
+            _grid.PerformLayout();
+            _grid.Refresh();
+            if (_grid.Rows.Count > 0)
+            {
+                _grid.CurrentCell = _grid.Rows[0].Cells["pn"];
             }
         }
     }

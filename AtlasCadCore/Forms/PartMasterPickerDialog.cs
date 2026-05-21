@@ -68,7 +68,11 @@ namespace AtlasCadCore.Forms
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 MultiSelect = false,
                 AutoGenerateColumns = false,
+                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+                ColumnHeadersHeight = 28,
             };
+            _grid.RowTemplate.Height = 26;
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Part Number", Name = "pn", Width = 130 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Description", Name = "desc", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Group", Name = "group", Width = 200 });
@@ -132,10 +136,26 @@ namespace AtlasCadCore.Forms
                         }
                     }
                 }
+                // Save + restore search-box focus so the user can keep
+                // typing while debounced searches come back.
+                bool restoreSearchFocus = _searchBox.Focused;
+                int caret = _searchBox.SelectionStart;
+                int selLen = _searchBox.SelectionLength;
+
                 _grid.Rows.Clear();
                 foreach (var r in _rows.OrderBy(r => r.PartNumber))
                     _grid.Rows.Add(r.PartNumber, r.Description, r.GroupLabel, r.ReleaseType);
+                _grid.PerformLayout();
+                _grid.Refresh();
+                if (_grid.Rows.Count > 0) _grid.CurrentCell = _grid.Rows[0].Cells["pn"];
                 UpdateOkButton();
+
+                if (restoreSearchFocus)
+                {
+                    _searchBox.Focus();
+                    _searchBox.SelectionStart = caret;
+                    _searchBox.SelectionLength = selLen;
+                }
             }
             catch (Exception ex)
             {
