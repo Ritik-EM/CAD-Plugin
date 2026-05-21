@@ -125,6 +125,34 @@ namespace AtlasCadCore.Forms
                     // Silently dropping was hiding the parts a user had actually
                     // edited from the propagation grid.
                     var dropped = native.Where(n => !string.IsNullOrEmpty(n.SkipReason)).ToList();
+
+                    // Always log what the adapter returned so we can diagnose
+                    // "only N rows in the grid" complaints without forcing the
+                    // user through a rebuild loop. Writes silently to
+                    // %APPDATA%\AtlasCad\walk_assembly.log on every check-in.
+                    try
+                    {
+                        string logDir = Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                            "AtlasCad");
+                        Directory.CreateDirectory(logDir);
+                        string logPath = Path.Combine(logDir, "walk_assembly.log");
+                        var lines = new List<string>();
+                        lines.Add($"=== {DateTime.Now:O} — Check In on {rootPartNumber} ===");
+                        lines.Add($"WalkAssembly returned {native.Count} entries " +
+                                  $"({native.Count - dropped.Count} healthy, {dropped.Count} dropped):");
+                        foreach (var n in native)
+                        {
+                            string mark = string.IsNullOrEmpty(n.SkipReason) ? "ok " : "DROP";
+                            string pn = n.PartNumber ?? "(no-pn)";
+                            string reason = n.SkipReason ?? "";
+                            lines.Add($"  [{mark}] pn={pn,-12} parent={n.ParentPartNumber ?? "-",-12} reason={reason,-15} path={n.FullPath}");
+                        }
+                        lines.Add("");
+                        File.AppendAllLines(logPath, lines);
+                    }
+                    catch { }
+
                     if (dropped.Count > 0)
                     {
                         progress.Hide();

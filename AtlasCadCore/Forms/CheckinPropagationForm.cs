@@ -70,11 +70,10 @@ namespace AtlasCadCore.Forms
 
             var hdr = new Label
             {
-                Dock = DockStyle.Top, Height = 72, Padding = new Padding(10, 8, 10, 0),
+                Dock = DockStyle.Fill, Padding = new Padding(10, 8, 10, 0),
                 Text = $"Check in: {_rootPartNumber}   (release_type: {_releaseType})\n\n" +
                        preTickHint,
             };
-            Controls.Add(hdr);
 
             _grid = new DataGridView
             {
@@ -86,7 +85,11 @@ namespace AtlasCadCore.Forms
                 AutoGenerateColumns = false,
                 SelectionMode = DataGridViewSelectionMode.CellSelect,
                 EditMode = DataGridViewEditMode.EditOnEnter,
+                AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None,
+                ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
+                ColumnHeadersHeight = 28,
             };
+            _grid.RowTemplate.Height = 26;
             _grid.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Modified", Name = "modified", Width = 80 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Part Number", Name = "part_number", Width = 130, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename", Name = "filename", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
@@ -100,9 +103,13 @@ namespace AtlasCadCore.Forms
             {
                 if (_grid.IsCurrentCellDirty) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
             };
-            Controls.Add(_grid);
 
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 200, Padding = new Padding(10) };
+            // bottom now fills its cell in the outer TableLayoutPanel (rather
+            // than docking to the form bottom). Same deterministic layout
+            // pattern used elsewhere — keeps the grid's middle area from
+            // being eaten by z-order conflicts between Dock=Fill and
+            // Dock=Bottom siblings.
+            var bottom = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10) };
 
             // Row 1: Comment
             bottom.Controls.Add(new Label { Text = "Comment (optional):", Location = new Point(10, 6), AutoSize = true });
@@ -158,7 +165,11 @@ namespace AtlasCadCore.Forms
             };
             bottom.Controls.Add(_summaryLabel);
 
-            var ok = new Button { Text = "Confirm Check In", Width = 140, Height = 28, DialogResult = DialogResult.None, Anchor = AnchorStyles.Right | AnchorStyles.Bottom };
+            // Anchor=Top|Right because the cell is exactly 200px tall — Y=160
+            // is measured from the top of the cell, which is reliable. The
+            // earlier Anchor=Bottom version produced an off-cell Y when the
+            // parent TableLayoutPanel resized the panel.
+            var ok = new Button { Text = "Confirm Check In", Width = 140, Height = 28, DialogResult = DialogResult.None, Anchor = AnchorStyles.Top | AnchorStyles.Right };
             ok.Location = new Point(bottom.Width - 290, 160);
             ok.Click += (s, e) =>
             {
@@ -181,13 +192,31 @@ namespace AtlasCadCore.Forms
             };
             bottom.Controls.Add(ok);
 
-            var cancel = new Button { Text = "Cancel", Width = 100, Height = 28, DialogResult = DialogResult.Cancel, Anchor = AnchorStyles.Right | AnchorStyles.Bottom };
+            var cancel = new Button { Text = "Cancel", Width = 100, Height = 28, DialogResult = DialogResult.Cancel, Anchor = AnchorStyles.Top | AnchorStyles.Right };
             cancel.Location = new Point(bottom.Width - 130, 160);
             bottom.Controls.Add(cancel);
 
             AcceptButton = ok;
             CancelButton = cancel;
-            Controls.Add(bottom);
+
+            // Outer 3-row TableLayoutPanel — deterministic layout. Same
+            // pattern used by the other Atlas dialogs to avoid the
+            // Dock=Top/Fill/Bottom z-order issue that was hiding the grid
+            // entirely in some screen-size configurations.
+            var outer = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+            };
+            outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 72f));   // hdr
+            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));   // grid
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 200f));  // bottom
+            outer.Controls.Add(hdr,    0, 0);
+            outer.Controls.Add(_grid,  0, 1);
+            outer.Controls.Add(bottom, 0, 2);
+            Controls.Add(outer);
         }
 
         private async Task OnSendOtpAsync()

@@ -7,11 +7,14 @@ namespace AtlasCadCore.Utility
     /// 10-char alphanumeric part_number matcher.
     /// Format: CAT(1) MDL(1) MAJ(1) MIN(1) SEQ(4) REV(2)
     ///
-    /// Filenames in the wild come in two shapes:
+    /// Filenames in the wild come in three shapes:
     ///   1. exact 10-char names: "AN5T01040A.sldasm"
     ///   2. part_number as a prefix with descriptive suffix:
     ///      "AN5T01040A_ECO2.0 DOOR ASSY RH.sldasm"
-    /// Both shapes resolve to the same part_number.
+    ///   3. 8-char base code + underscore + 2-char revision + underscore + desc:
+    ///      "EL530011_00_HEX WELDNUT M5x0.81.sldprt" → "EL53001100"
+    ///      (legacy convention for standard-hardware parts).
+    /// All three shapes resolve to the same 10-char canonical part_number.
     /// </summary>
     public static class PartNumberParser
     {
@@ -21,14 +24,24 @@ namespace AtlasCadCore.Utility
         // separator (`_`, ` `, `-`, etc.) or end-of-string. Bounded so we don't
         // greedy-match the first 10 of a longer alphanumeric run.
         private static readonly Regex LeadingPattern = new Regex(@"^([A-Z0-9]{10})(?:[^A-Z0-9]|$)");
+        // 8-char base + underscore + 2-char revision. Some legacy filenames
+        // (mostly standard hardware) store the 10-char part_number with an
+        // underscore between the base code and the 2-char revision, then
+        // another underscore before the description. We strip the inner
+        // underscore to get back the canonical 10-char form.
+        private static readonly Regex BaseRevPattern = new Regex(
+            @"^([A-Z0-9]{8})_([A-Z0-9]{2})(?:[^A-Z0-9]|$)");
 
         public static string ParseOrNull(string filename)
         {
             if (string.IsNullOrEmpty(filename)) return null;
             string bare = Path.GetFileNameWithoutExtension(filename).Trim().ToUpperInvariant();
             if (ExactPattern.IsMatch(bare)) return bare;
-            var match = LeadingPattern.Match(bare);
-            return match.Success ? match.Groups[1].Value : null;
+            var leading = LeadingPattern.Match(bare);
+            if (leading.Success) return leading.Groups[1].Value;
+            var baseRev = BaseRevPattern.Match(bare);
+            if (baseRev.Success) return baseRev.Groups[1].Value + baseRev.Groups[2].Value;
+            return null;
         }
 
         /// <summary>

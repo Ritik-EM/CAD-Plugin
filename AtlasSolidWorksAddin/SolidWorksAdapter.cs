@@ -62,8 +62,28 @@ namespace AtlasCadPlugin.SolidWorks
                 "", ref errors, ref warnings);
         }
 
+        // Bumped on every WalkAssembly behaviour change. The check-in diagnostic
+        // reads this back, so when a user reports "wrong row count" we can tell
+        // at a glance whether they're on an old AtlasSolidWorksAddin.dll.
+        public const string WalkAssemblyVersion = "2026-05-21-skipreason-v1";
+
         public List<AssemblyFileRef> WalkAssembly(CadDocument doc)
         {
+            // Stamp the diagnostics log so the user can confirm the new
+            // adapter binary is loaded. AppendAllText is best-effort —
+            // failures are silently ignored so logging never breaks the walk.
+            try
+            {
+                string logDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "AtlasCad");
+                Directory.CreateDirectory(logDir);
+                File.AppendAllText(
+                    Path.Combine(logDir, "walk_assembly.log"),
+                    $"--- {DateTime.Now:O} SolidWorksAdapter.WalkAssembly v={WalkAssemblyVersion} invoked\n");
+            }
+            catch { }
+
             var swDoc = (IModelDoc2)doc.NativeHandle ??
                         throw new InvalidOperationException("No active document");
 
