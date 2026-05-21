@@ -69,14 +69,21 @@ namespace AtlasCadCore.Forms
                     var m = missing[i];
                     progress.SetPhase($"Looking up {i + 1}/{missing.Count}: {m.Filename}", i, missing.Count);
 
-                    if (string.IsNullOrEmpty(m.PartNumber))
+                    // Strict 10-char part_number first; if that didn't parse,
+                    // fall back to whatever leading alphanumeric code we can
+                    // get out of the filename (e.g. "EL530012" from
+                    // "EL530012_HEXAGON WELD NUT.sldprt") and let the lookup
+                    // do exact-with-"00" + prefix matching against atlas.
+                    string searchCode = m.PartNumber
+                        ?? AtlasCadCore.Utility.PartNumberParser.ExtractLeadingCode(m.Filename);
+                    if (string.IsNullOrEmpty(searchCode))
                     {
                         unresolved.Add(m);
                         continue;
                     }
 
-                    string nativeKey = await TryResolveNativeKeyAsync(api, m.PartNumber);
-                    if (nativeKey == null)
+                    var found = await TryResolveFromAtlasAsync(api, searchCode);
+                    if (found == null)
                     {
                         unresolved.Add(m);
                         continue;
@@ -84,9 +91,33 @@ namespace AtlasCadCore.Forms
 
                     try
                     {
-                        string url = await api.GetS3DownloadUrlAsync(nativeKey);
-                        string localPath = Path.Combine(resolveDir, m.Filename);
-                        await api.DownloadFileAsync(url, localPath);
+                        string url = await api.GetS3DownloadUrlAsync(found.Value.S3Key);
+                        // SW will resolve children by filename, so always end
+                        // up with a file at <resolveDir>/<SW-expected-name>.
+                        string targetPath = Path.Combine(resolveDir, m.Filename);
+                        if (found.Value.IsStep)
+                        {
+                            // STP fallback — download the STP, convert it to
+                            // a native locally so SW can open it. The native
+                            // file IS dumb geometry; that's a known trade-off
+                            // when atlas only has the STP for this part.
+                            string stepTemp = Path.Combine(resolveDir,
+                                "_step_" + Path.GetFileName(found.Value.S3Key));
+                            await api.DownloadFileAsync(url, stepTemp);
+                            string convertedPath = adapter.ImportStepAsNative(stepTemp, targetPath);
+                            // If the adapter saved as a different extension
+                            // than the original filename, also copy to the
+                            // expected name so SW's search folder finds it.
+                            if (!string.Equals(convertedPath, targetPath, StringComparison.OrdinalIgnoreCase)
+                                && File.Exists(convertedPath))
+                            {
+                                try { File.Copy(convertedPath, targetPath, overwrite: true); } catch { }
+                            }
+                        }
+                        else
+                        {
+                            await api.DownloadFileAsync(url, targetPath);
+                        }
                         resolvedFromAtlas++;
                     }
                     catch
@@ -199,12 +230,47 @@ namespace AtlasCadCore.Forms
             }
         }
 
-        private static async Task<string> TryResolveNativeKeyAsync(AtlasApiClient api, string partNumber)
+        public struct ResolvedFile
+        {
+            public string S3Key;
+            public bool IsStep;     // true when we matched only the 3d (STP) slot — caller will convert
+        }
+
+        /// <summary>
+        /// Find an S3 key in atlas that corresponds to `code`. Match precedence:
+        ///   1. exact part_number == code
+        ///   2. exact part_number == code + "00" (the convention atlas uses
+        ///      when a designer types just the 8-char stem and atlas has the
+        ///      PRODUCTION first revision in full 10-char form)
+        ///   3. prefix match (part_number startsWith code)
+        /// Within each match category, prefer active revisions and prefer
+        /// 3d_raw over 3d (STP fallback). Returns null when there's nothing.
+        /// </summary>
+        private static async Task<ResolvedFile?> TryResolveFromAtlasAsync(AtlasApiClient api, string code)
         {
             try
             {
                 var page = await api.ListPartMasterAsync(
-                    releaseType: null, search: partNumber, page: 1, limit: 50);
+                    releaseType: null, search: code, page: 1, limit: 50);
+
+                // 12 candidate buckets — exhaustive precedence:
+                //   match-tier ∈ {exact, paddedExact, prefix}
+                //   active     ∈ {true, false}
+                //   file-kind  ∈ {3d_raw native, 3d STP}
+                ResolvedFile? best = null;
+                int bestScore = int.MaxValue;       // lower is better
+                string padded = (code != null && code.Length < 10) ? code + "00" : null;
+
+                void Consider(int score, string key, bool isStep)
+                {
+                    if (string.IsNullOrEmpty(key)) return;
+                    if (score < bestScore)
+                    {
+                        bestScore = score;
+                        best = new ResolvedFile { S3Key = key, IsStep = isStep };
+                    }
+                }
+
                 foreach (var d in page?.items ?? new List<PartMasterDocumentDto>())
                 {
                     if (d.releases == null) continue;
@@ -213,14 +279,33 @@ namespace AtlasCadCore.Forms
                         if (bucket == null) continue;
                         foreach (var rev in bucket)
                         {
-                            if (rev == null) continue;
-                            if (!string.Equals(rev.part_number, partNumber, StringComparison.OrdinalIgnoreCase))
+                            if (rev?.part_number == null) continue;
+                            var refs = rev.EffectiveRefs;
+                            if (refs == null) continue;
+
+                            int matchTier;
+                            if (string.Equals(rev.part_number, code, StringComparison.OrdinalIgnoreCase))
+                                matchTier = 0;
+                            else if (padded != null && string.Equals(rev.part_number, padded, StringComparison.OrdinalIgnoreCase))
+                                matchTier = 1;
+                            else if (rev.part_number.StartsWith(code, StringComparison.OrdinalIgnoreCase))
+                                matchTier = 2;
+                            else
                                 continue;
-                            string nativeKey = rev.EffectiveRefs?.Native3dRaw;
-                            if (!string.IsNullOrEmpty(nativeKey)) return nativeKey;
+
+                            int activeWeight = rev.active == true ? 0 : 1;
+                            // Score: matchTier * 100 + activeWeight * 10 + fileKind
+                            //   matchTier 0/1/2  → exact / paddedExact / prefix
+                            //   activeWeight 0/1 → active / inactive
+                            //   fileKind 0/1     → 3d_raw / 3d STP
+                            int baseScore = matchTier * 100 + activeWeight * 10;
+                            Consider(baseScore + 0, refs.Native3dRaw, isStep: false);
+                            Consider(baseScore + 1, refs.Step3d,      isStep: true);
                         }
                     }
                 }
+
+                return best;
             }
             catch
             {

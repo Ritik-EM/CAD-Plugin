@@ -31,6 +31,26 @@ namespace AtlasCadCore.Utility
             return match.Success ? match.Groups[1].Value : null;
         }
 
+        /// <summary>
+        /// Extract any leading alphanumeric code from a filename, not just
+        /// the strict 10-char form. Used by the Resolve-from-Atlas flow when
+        /// project filenames use shorter codes (e.g. "EL530012_HEXAGON..."
+        /// where "EL530012" is the part_number stem and atlas stores the
+        /// full code with a revision suffix like "EL5300120A").
+        /// Returns the leading alphanumeric run if it's at least `minLength`
+        /// chars, otherwise null.
+        /// </summary>
+        public static string ExtractLeadingCode(string filename, int minLength = 6)
+        {
+            if (string.IsNullOrEmpty(filename)) return null;
+            string bare = Path.GetFileNameWithoutExtension(filename).Trim().ToUpperInvariant();
+            var match = LeadingCodePattern.Match(bare);
+            if (!match.Success) return null;
+            return match.Value.Length >= minLength ? match.Value : null;
+        }
+
+        private static readonly Regex LeadingCodePattern = new Regex("^[A-Z0-9]+");
+
         public static bool LooksValid(string candidate)
         {
             if (string.IsNullOrEmpty(candidate)) return false;

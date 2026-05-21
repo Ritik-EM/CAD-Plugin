@@ -278,6 +278,11 @@ namespace AtlasCadPlugin.SolidWorks
             // GetComponents(true) walks every component recursively. Missing
             // children stay as Component2 objects with a path set but no
             // file on disk + GetModelDoc2 returning null.
+            //
+            // NOTE: we deliberately do NOT skip suppressed components. When
+            // SW can't find a child file, it auto-suppresses the component
+            // (these are exactly the broken-reference ones we want to find
+            // and download). Filtering on IsSuppressed() would skip them.
             object[] components = (object[])asm.GetComponents(true);
             if (components == null) return result;
 
@@ -286,7 +291,6 @@ namespace AtlasCadPlugin.SolidWorks
             {
                 var c = comp as Component2;
                 if (c == null) continue;
-                if (c.IsSuppressed()) continue;
 
                 string path = c.GetPathName();
                 if (string.IsNullOrEmpty(path)) continue;
