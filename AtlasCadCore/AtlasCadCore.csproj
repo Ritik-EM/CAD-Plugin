@@ -70,6 +70,7 @@
     <Compile Include="Utility\CheckoutTracker.cs" />
     <Compile Include="Utility\FileHashStash.cs" />
     <Compile Include="Utility\FileHashing.cs" />
+    <Compile Include="Utility\PluginVersion.cs" />
     <Compile Include="Utility\PartNumberParser.cs" />
   </ItemGroup>
   <ItemGroup>

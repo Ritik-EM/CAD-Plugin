@@ -60,7 +60,7 @@ namespace AtlasCadCore.Forms
 
         private void BuildUi()
         {
-            Text = "Atlas — Browse Part Master Library";
+            Text = $"Atlas — Browse Part Master Library  ({PluginVersion.Display})";
             Size = new Size(1100, 650);
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(900, 500);
@@ -241,8 +241,30 @@ namespace AtlasCadCore.Forms
 
             split.Panel2.Controls.Add(detailRoot);
 
-            // Status bar
-            _statusLabel = new Label { Dock = DockStyle.Fill, Height = 22, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0), Text = "Ready." };
+            // Status bar — 2 columns: dynamic status text fills the left,
+            // version chip pinned to the right so users can always see which
+            // plugin build they're running without opening a separate dialog.
+            _statusLabel = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0), Text = "Ready." };
+            var versionChip = new Label
+            {
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleRight,
+                Padding = new Padding(0, 0, 10, 0),
+                Text = $"Atlas CAD Plugin {PluginVersion.Display}",
+                ForeColor = Color.DimGray,
+                Font = new Font(Font.FontFamily, 8f),
+            };
+            var statusRow = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 1,
+            };
+            statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            statusRow.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            statusRow.Controls.Add(_statusLabel, 0, 0);
+            statusRow.Controls.Add(versionChip,  1, 0);
 
             // Outer layout uses a TableLayoutPanel — three rows, deterministic.
             // Avoids the WinForms Dock-overlap pitfalls we hit earlier where
@@ -258,9 +280,9 @@ namespace AtlasCadCore.Forms
             outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 44f));   // top toolbar
             outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));   // split container
             outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 24f));   // status bar
-            outer.Controls.Add(topPanel,    0, 0);
-            outer.Controls.Add(split,       0, 1);
-            outer.Controls.Add(_statusLabel, 0, 2);
+            outer.Controls.Add(topPanel,   0, 0);
+            outer.Controls.Add(split,      0, 1);
+            outer.Controls.Add(statusRow,  0, 2);
             Controls.Add(outer);
         }
 

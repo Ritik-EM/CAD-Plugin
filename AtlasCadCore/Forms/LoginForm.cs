@@ -3,6 +3,7 @@ using System.Drawing;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using AtlasCadCore.Auth;
+using AtlasCadCore.Utility;
 
 namespace AtlasCadCore.Forms
 {
@@ -20,9 +21,9 @@ namespace AtlasCadCore.Forms
         public LoginForm(AuthService auth, string presetUser)
         {
             _auth = auth;
-            Text = "Atlas — Sign In";
+            Text = $"Atlas — Sign In  ({PluginVersion.Display})";
             Width = 420;
-            Height = 250;
+            Height = 270;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterParent;
             MaximizeBox = false;
@@ -55,6 +56,20 @@ namespace AtlasCadCore.Forms
             _loginButton = new Button { Text = "Sign In", Location = new Point(305, y), Width = 85 };
             _loginButton.Click += async (s, e) => await TryLogin();
             Controls.Add(_loginButton);
+
+            // Version footer — bottom-left, small grey text so it's discoverable
+            // without competing with the sign-in CTA. Anchored Bottom so it
+            // stays in the corner even if the form is resized in a future tweak.
+            var versionLabel = new Label
+            {
+                Text = $"Atlas CAD Plugin {PluginVersion.Display}",
+                Location = new Point(15, y + 36),
+                Width = 200,
+                AutoSize = true,
+                ForeColor = Color.DimGray,
+                Font = new Font(Font.FontFamily, 8f),
+            };
+            Controls.Add(versionLabel);
 
             AcceptButton = _loginButton;
             CancelButton = _cancelButton;
