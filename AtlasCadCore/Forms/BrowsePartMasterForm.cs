@@ -65,8 +65,9 @@ namespace AtlasCadCore.Forms
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(900, 500);
 
-            // Top bar
-            var topPanel = new Panel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
+            // Top bar — NOT docked; it'll be placed in row 0 of the
+            // outer TableLayoutPanel set up at the end of BuildUi().
+            var topPanel = new Panel { Dock = DockStyle.Fill, Height = 44, Padding = new Padding(8) };
             topPanel.Controls.Add(new Label { Text = "Release type:", AutoSize = true, Location = new Point(8, 14) });
             _releaseTypeCombo = new ComboBox
             {
@@ -99,8 +100,7 @@ namespace AtlasCadCore.Forms
             _refreshBtn = new Button { Text = "Refresh", Location = new Point(682, 8), Width = 80 };
             _refreshBtn.Click += (s, e) => _ = ReloadAsync();
             topPanel.Controls.Add(_refreshBtn);
-
-            Controls.Add(topPanel);
+            // (topPanel will be added to the outer TableLayoutPanel later.)
 
             // Split: grid on the left, details + actions on the right.
             // SplitterDistance / Panel2MinSize must be set AFTER the container
@@ -144,6 +144,13 @@ namespace AtlasCadCore.Forms
                 ColumnHeadersHeight = 28,
             };
             _grid.RowTemplate.Height = 26;
+            // SW's hosting process sometimes mis-renders the visual-styles
+            // version of column headers (renders them blank). Disabling
+            // visual styles forces the classic look — guaranteed visible.
+            _grid.EnableHeadersVisualStyles = false;
+            _grid.ColumnHeadersDefaultCellStyle.BackColor = SystemColors.ControlLight;
+            _grid.ColumnHeadersDefaultCellStyle.ForeColor = SystemColors.ControlText;
+            _grid.ColumnHeadersDefaultCellStyle.Font = new Font(Font, FontStyle.Bold);
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Part No.", Name = "part_number", Width = 130 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Description", Name = "description", Width = 240 });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Major/Minor", Name = "groups", Width = 140 });
@@ -164,12 +171,13 @@ namespace AtlasCadCore.Forms
             _nextPageBtn.Click += async (s, e) => { if (_page < _totalPages) { _page++; await ReloadAsync(); } };
             pagerPanel.Controls.Add(_nextPageBtn);
 
-            // WinForms docks higher-Z-order siblings FIRST. Reliable idiom:
-            // add the Fill child LAST so it lays out around already-docked
-            // edges. Equivalently — add docked edges first.
+            // SendToBack on the Fill so the layout engine docks it LAST,
+            // letting the pager actually claim the bottom strip instead of
+            // overlapping with it.
             _grid.Dock = DockStyle.Fill;
             split.Panel1.Controls.Add(pagerPanel);
             split.Panel1.Controls.Add(_grid);
+            _grid.SendToBack();
 
             // ---- Detail panel — heading on top, scrollable text in the
             // middle, action buttons pinned to the bottom. ----
@@ -234,25 +242,26 @@ namespace AtlasCadCore.Forms
             split.Panel2.Controls.Add(detailRoot);
 
             // Status bar
-            _statusLabel = new Label { Dock = DockStyle.Bottom, Height = 22, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0), Text = "Ready." };
+            _statusLabel = new Label { Dock = DockStyle.Fill, Height = 22, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0), Text = "Ready." };
 
-            // WinForms docked-sibling layout: docked controls are processed
-            // in *addition order* — first-added gets first claim on its
-            // edge, then the next, and so on. So edges (Top + Bottom)
-            // must be added FIRST and Fill LAST when they're going onto
-            // the same parent — that way edges grab their strip first
-            // and Fill gets only what's left.
-            //
-            // ⚠️ But this form was misbehaving with that pattern: the
-            // SplitContainer (Fill) was claiming the whole form area
-            // with topPanel + statusLabel drawn on top, hiding the grid's
-            // column headers and the pager. The reliable workaround is
-            // to SendToBack the Fill after adding everything — that
-            // puts it at the back of the z-order so the docked edges
-            // genuinely carve their space out instead of overlapping.
-            Controls.Add(split);
-            Controls.Add(_statusLabel);
-            split.SendToBack();
+            // Outer layout uses a TableLayoutPanel — three rows, deterministic.
+            // Avoids the WinForms Dock-overlap pitfalls we hit earlier where
+            // the SplitContainer would creep behind the toolbar / status
+            // label and hide the grid's column headers + pager.
+            var outer = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+            };
+            outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 44f));   // top toolbar
+            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));   // split container
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 24f));   // status bar
+            outer.Controls.Add(topPanel,    0, 0);
+            outer.Controls.Add(split,       0, 1);
+            outer.Controls.Add(_statusLabel, 0, 2);
+            Controls.Add(outer);
         }
 
         // ---- Data loading ----

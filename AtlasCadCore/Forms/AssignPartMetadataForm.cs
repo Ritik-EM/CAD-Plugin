@@ -41,7 +41,7 @@ namespace AtlasCadCore.Forms
 
             var hdr = new Label
             {
-                Dock = DockStyle.Top, Height = 36, Padding = new Padding(8, 6, 8, 0),
+                Dock = DockStyle.Fill, Padding = new Padding(8, 6, 8, 0),
                 Text = $"{_missing.Count} part(s) don't exist in part_master_library yet. " +
                        "Fill in the metadata below — Atlas will mint a fresh part_number for each.",
             };
@@ -49,7 +49,7 @@ namespace AtlasCadCore.Forms
             // correct order — Top + Bottom siblings first, Fill grid LAST.)
 
             // Defaults panel
-            var defaults = new GroupBox { Dock = DockStyle.Top, Height = 96, Text = "Defaults (apply to empty cells)", Padding = new Padding(8) };
+            var defaults = new GroupBox { Dock = DockStyle.Fill, Text = "Defaults (apply to empty cells)", Padding = new Padding(8) };
             int x = 10, y = 22, lblW = 80, fldW = 100, gap = 8;
 
             void AddDefault(string label, Control field)
@@ -117,18 +117,24 @@ namespace AtlasCadCore.Forms
             // row doesn't get clipped under the docked defaults panel.
 
             // Buttons
-            var btnPanel = new Panel { Dock = DockStyle.Bottom, Height = 44 };
+            var btnPanel = new Panel { Dock = DockStyle.Fill, Height = 44 };
             var ok = new Button { Text = "Create & Upload", Location = new Point(btnPanel.Width - 280, 10), Anchor = AnchorStyles.Right, Width = 130, DialogResult = DialogResult.OK };
             ok.Click += (s, e) => OnOk();
             var cancel = new Button { Text = "Cancel", Location = new Point(btnPanel.Width - 140, 10), Anchor = AnchorStyles.Right, Width = 100, DialogResult = DialogResult.Cancel };
             btnPanel.Controls.Add(ok);
             btnPanel.Controls.Add(cancel);
-            // Fill grid sent to back of z-order so docked edges (hdr,
-            // defaults, btnPanel) carve out their strips first.
-            Controls.Add(hdr);
-            Controls.Add(btnPanel);
-            Controls.Add(_grid);
-            _grid.SendToBack();
+            // 4-row TableLayoutPanel — deterministic layout, no z-order tricks.
+            var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
+            outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 40f));    // hdr
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 100f));   // defaults groupbox
+            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));    // grid
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 48f));    // btnPanel
+            outer.Controls.Add(hdr,       0, 0);
+            outer.Controls.Add(defaults,  0, 1);
+            outer.Controls.Add(_grid,     0, 2);
+            outer.Controls.Add(btnPanel,  0, 3);
+            Controls.Add(outer);
             AcceptButton = ok;
             CancelButton = cancel;
         }

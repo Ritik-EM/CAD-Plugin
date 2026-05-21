@@ -60,7 +60,7 @@ namespace AtlasCadCore.Forms
 
             var hdr = new Label
             {
-                Dock = DockStyle.Top, Height = 50, Padding = new Padding(10, 8, 10, 0),
+                Dock = DockStyle.Fill, Padding = new Padding(10, 8, 10, 0),
                 Text = $"{_rows.Count} child part(s) couldn't be downloaded from atlas (no native file " +
                        "available). For each one, click Browse… to attach the local .sldprt/.sldasm. " +
                        "Leave a row blank to skip that part.",
@@ -105,7 +105,7 @@ namespace AtlasCadCore.Forms
                 }
             };
 
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 130, Padding = new Padding(10) };
+            var bottom = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10) };
 
             _releaseRevisionCheck = new CheckBox
             {
@@ -166,15 +166,21 @@ namespace AtlasCadCore.Forms
             AcceptButton = ok;
             CancelButton = cancel;
 
-            // Empirically reliable WinForms idiom: add the Fill control,
-            // then SendToBack it. That puts Fill at the bottom of the
-            // z-order so the layout engine docks it LAST — meaning the
-            // edge-docked siblings (hdr, bottom) actually carve their
-            // strips out instead of overlapping the Fill area.
-            Controls.Add(hdr);
-            Controls.Add(bottom);
-            Controls.Add(_grid);
-            _grid.SendToBack();
+            // Outer 3-row TableLayoutPanel — deterministic, no z-order tricks.
+            var outer = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 3,
+            };
+            outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 56f));    // header label
+            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));    // grid
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 140f));   // bottom panel (OTP + buttons)
+            outer.Controls.Add(hdr,    0, 0);
+            outer.Controls.Add(_grid,  0, 1);
+            outer.Controls.Add(bottom, 0, 2);
+            Controls.Add(outer);
 
             UpdateOtpUi();
         }

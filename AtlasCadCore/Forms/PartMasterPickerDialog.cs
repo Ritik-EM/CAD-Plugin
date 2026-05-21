@@ -50,7 +50,7 @@ namespace AtlasCadCore.Forms
             StartPosition = FormStartPosition.CenterParent;
             MinimumSize = new Size(640, 380);
 
-            var top = new Panel { Dock = DockStyle.Top, Height = 40, Padding = new Padding(8) };
+            var top = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8) };
             top.Controls.Add(new Label { Text = "Search:", Location = new Point(6, 12), AutoSize = true });
             _searchBox = new TextBox { Location = new Point(60, 8), Width = 700, Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right };
             _searchBox.TextChanged += (s, e) => { _debounce?.Stop(); _debounce?.Start(); };
@@ -80,7 +80,7 @@ namespace AtlasCadCore.Forms
             _grid.SelectionChanged += (s, e) => UpdateOkButton();
             _grid.CellDoubleClick += (s, e) => { if (_okBtn.Enabled) { _okBtn.PerformClick(); } };
 
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(8) };
+            var bottom = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8) };
             _okBtn = new Button { Text = "Use This Part", Width = 130, Height = 28, DialogResult = DialogResult.None, Anchor = AnchorStyles.Right | AnchorStyles.Bottom, Enabled = false };
             _okBtn.Location = new Point(bottom.Width - 250, 10);
             _okBtn.Click += (s, e) =>
@@ -99,12 +99,16 @@ namespace AtlasCadCore.Forms
             AcceptButton = _okBtn;
             CancelButton = cancel;
 
-            // Fill is sent to back of z-order so the layout engine docks
-            // it LAST — edges (top + bottom) carve their strips first.
-            Controls.Add(top);
-            Controls.Add(bottom);
-            Controls.Add(_grid);
-            _grid.SendToBack();
+            // Deterministic 3-row layout — same pattern as the Browse form.
+            var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 44f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 56f));
+            outer.Controls.Add(top,    0, 0);
+            outer.Controls.Add(_grid,  0, 1);
+            outer.Controls.Add(bottom, 0, 2);
+            Controls.Add(outer);
         }
 
         private void UpdateOkButton()

@@ -41,7 +41,7 @@ namespace AtlasCadCore.Forms
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(560, 320);
 
-            var top = new Panel { Dock = DockStyle.Top, Height = 44, Padding = new Padding(8) };
+            var top = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8) };
             _refreshBtn = new Button { Text = "Refresh", Location = new Point(6, 8), Width = 90 };
             _refreshBtn.Click += async (s, e) => await ReloadAsync();
             top.Controls.Add(_refreshBtn);
@@ -75,7 +75,7 @@ namespace AtlasCadCore.Forms
                 if (_grid.IsCurrentCellDirty) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
             };
 
-            var bottom = new Panel { Dock = DockStyle.Bottom, Height = 48, Padding = new Padding(8) };
+            var bottom = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8) };
             _statusLabel = new Label { Location = new Point(8, 14), AutoSize = true, Text = "Loading…", ForeColor = Color.DimGray };
             bottom.Controls.Add(_statusLabel);
             _releaseBtn = new Button
@@ -99,13 +99,15 @@ namespace AtlasCadCore.Forms
             bottom.Controls.Add(close);
             CancelButton = close;
 
-            // Fill grid sent to back of z-order — see MissingChildUploadForm
-            // note. Without this the grid's top + bottom rows are clipped
-            // under the docked toolbar / bottom sibling.
-            Controls.Add(top);
-            Controls.Add(bottom);
-            Controls.Add(_grid);
-            _grid.SendToBack();
+            var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
+            outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 44f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 54f));
+            outer.Controls.Add(top,    0, 0);
+            outer.Controls.Add(_grid,  0, 1);
+            outer.Controls.Add(bottom, 0, 2);
+            Controls.Add(outer);
         }
 
         private async Task ReloadAsync()
