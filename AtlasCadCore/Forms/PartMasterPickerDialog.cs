@@ -80,9 +80,34 @@ namespace AtlasCadCore.Forms
             _grid.SelectionChanged += (s, e) => UpdateOkButton();
             _grid.CellDoubleClick += (s, e) => { if (_okBtn.Enabled) { _okBtn.PerformClick(); } };
 
-            var bottom = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8) };
-            _okBtn = new Button { Text = "Use This Part", Width = 130, Height = 28, DialogResult = DialogResult.None, Anchor = AnchorStyles.Right | AnchorStyles.Bottom, Enabled = false };
-            _okBtn.Location = new Point(bottom.Width - 250, 10);
+            // 3-column TableLayoutPanel — deterministic right-alignment.
+            // The earlier "Anchor=Bottom + Location relative to bottom.Width"
+            // pattern broke as soon as the outer TableLayoutPanel resized
+            // this cell, pushing the buttons off-screen.
+            var bottom = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 3,
+                RowCount = 1,
+                Padding = new Padding(8, 6, 8, 6),
+            };
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            bottom.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+
+            // Spacer cell (status text could go here later).
+            bottom.Controls.Add(new Label { AutoSize = true, Anchor = AnchorStyles.Left, Text = "" }, 0, 0);
+
+            _okBtn = new Button
+            {
+                Text = "Use This Part",
+                Width = 130, Height = 28,
+                DialogResult = DialogResult.None,
+                Anchor = AnchorStyles.Right,
+                Enabled = false,
+                Margin = new Padding(4),
+            };
             _okBtn.Click += (s, e) =>
             {
                 int idx = _grid.CurrentRow?.Index ?? -1;
@@ -92,10 +117,17 @@ namespace AtlasCadCore.Forms
                 DialogResult = DialogResult.OK;
                 Close();
             };
-            bottom.Controls.Add(_okBtn);
-            var cancel = new Button { Text = "Cancel", Width = 100, Height = 28, DialogResult = DialogResult.Cancel, Anchor = AnchorStyles.Right | AnchorStyles.Bottom };
-            cancel.Location = new Point(bottom.Width - 110, 10);
-            bottom.Controls.Add(cancel);
+            bottom.Controls.Add(_okBtn, 1, 0);
+
+            var cancel = new Button
+            {
+                Text = "Cancel",
+                Width = 100, Height = 28,
+                DialogResult = DialogResult.Cancel,
+                Anchor = AnchorStyles.Right,
+                Margin = new Padding(4),
+            };
+            bottom.Controls.Add(cancel, 2, 0);
             AcceptButton = _okBtn;
             CancelButton = cancel;
 

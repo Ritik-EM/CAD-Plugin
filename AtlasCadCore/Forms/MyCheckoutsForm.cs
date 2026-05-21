@@ -75,28 +75,53 @@ namespace AtlasCadCore.Forms
                 if (_grid.IsCurrentCellDirty) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
             };
 
-            var bottom = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8) };
-            _statusLabel = new Label { Location = new Point(8, 14), AutoSize = true, Text = "Loading…", ForeColor = Color.DimGray };
-            bottom.Controls.Add(_statusLabel);
+            // 3-column TableLayoutPanel for the bottom row: status fills,
+            // two buttons auto-size on the right. This avoids the broken
+            // "Anchor=Bottom + Location based on bottom.Width" pattern that
+            // pushed the buttons off-cell when the parent TableLayoutPanel
+            // resized this panel after construction.
+            var bottom = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 3,
+                RowCount = 1,
+                Padding = new Padding(8, 6, 8, 6),
+            };
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            bottom.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+
+            _statusLabel = new Label
+            {
+                AutoSize = true,
+                Anchor = AnchorStyles.Left,
+                Text = "Loading…",
+                ForeColor = Color.DimGray,
+                Margin = new Padding(4, 8, 4, 4),
+            };
+            bottom.Controls.Add(_statusLabel, 0, 0);
+
             _releaseBtn = new Button
             {
                 Text = "Release Selected",
                 Width = 160, Height = 28,
-                Anchor = AnchorStyles.Right | AnchorStyles.Bottom,
+                Anchor = AnchorStyles.Right,
                 Enabled = false,
+                Margin = new Padding(4),
             };
-            _releaseBtn.Location = new Point(bottom.Width - 280, 10);
             _releaseBtn.Click += async (s, e) => await ReleaseSelectedAsync();
-            bottom.Controls.Add(_releaseBtn);
+            bottom.Controls.Add(_releaseBtn, 1, 0);
+
             var close = new Button
             {
                 Text = "Close",
                 Width = 100, Height = 28,
-                Anchor = AnchorStyles.Right | AnchorStyles.Bottom,
+                Anchor = AnchorStyles.Right,
                 DialogResult = DialogResult.Cancel,
+                Margin = new Padding(4),
             };
-            close.Location = new Point(bottom.Width - 110, 10);
-            bottom.Controls.Add(close);
+            bottom.Controls.Add(close, 2, 0);
             CancelButton = close;
 
             var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };

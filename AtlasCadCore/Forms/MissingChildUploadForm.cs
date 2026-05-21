@@ -138,7 +138,10 @@ namespace AtlasCadCore.Forms
             };
             bottom.Controls.Add(_otpHint);
 
-            var ok = new Button { Text = "Upload & Continue", Location = new Point(bottom.Width - 290, 88), Width = 160, Height = 28, Anchor = AnchorStyles.Right | AnchorStyles.Bottom, DialogResult = DialogResult.None };
+            // Anchor=Right only (not Bottom). When the outer TableLayoutPanel
+            // resizes this cell, an Anchor=Bottom button with Y=88 ends up
+            // off-cell — we want Y=88 measured from the top of the cell.
+            var ok = new Button { Text = "Upload & Continue", Location = new Point(bottom.Width - 290, 88), Width = 160, Height = 28, Anchor = AnchorStyles.Top | AnchorStyles.Right, DialogResult = DialogResult.None };
             ok.Click += (s, e) =>
             {
                 ReleaseNewRevision = _releaseRevisionCheck.Checked;
@@ -160,7 +163,7 @@ namespace AtlasCadCore.Forms
             };
             bottom.Controls.Add(ok);
 
-            var cancel = new Button { Text = "Skip uploads", Location = new Point(bottom.Width - 120, 88), Width = 100, Height = 28, Anchor = AnchorStyles.Right | AnchorStyles.Bottom, DialogResult = DialogResult.Cancel };
+            var cancel = new Button { Text = "Skip uploads", Location = new Point(bottom.Width - 120, 88), Width = 100, Height = 28, Anchor = AnchorStyles.Top | AnchorStyles.Right, DialogResult = DialogResult.Cancel };
             bottom.Controls.Add(cancel);
 
             AcceptButton = ok;
