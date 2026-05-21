@@ -31,9 +31,9 @@ namespace AtlasCadCore.Forms
         public static async Task RunAsync(AtlasApiClient api, ICadAdapter adapter)
         {
             CadDocument doc = adapter.GetActiveDocument();
-            if (doc == null || !doc.IsAssembly)
+            if (doc == null)
             {
-                MessageBox.Show("Open an assembly first.", "Atlas — Upload",
+                MessageBox.Show("Open a part or assembly first.", "Atlas — Upload",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }
@@ -46,8 +46,44 @@ namespace AtlasCadCore.Forms
                 {
                     adapter.SaveDocument(doc);
 
-                    progress.SetPhase("Walking assembly tree…");
-                    var native = adapter.WalkAssembly(doc) ?? new List<AssemblyFileRef>();
+                    // Both assemblies and single parts go through this flow.
+                    // For an assembly we walk its tree; for a single .sldprt
+                    // we synthesise a one-entry list of just the open doc so
+                    // the user can push a brand-new part to atlas without
+                    // needing to wrap it in an assembly first.
+                    List<AssemblyFileRef> native;
+                    if (doc.IsAssembly)
+                    {
+                        progress.SetPhase("Walking assembly tree…");
+                        native = adapter.WalkAssembly(doc) ?? new List<AssemblyFileRef>();
+                    }
+                    else
+                    {
+                        progress.SetPhase("Reading active part…");
+                        string filename = Path.GetFileName(doc.FullPath ?? "");
+                        if (string.IsNullOrEmpty(doc.FullPath) || string.IsNullOrEmpty(filename))
+                        {
+                            MessageBox.Show(
+                                "The active part hasn't been saved to disk yet. " +
+                                "Save it (Ctrl+S) and try again.",
+                                "Atlas — Upload",
+                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+                        native = new List<AssemblyFileRef>
+                        {
+                            new AssemblyFileRef
+                            {
+                                FullPath = doc.FullPath,
+                                Filename = filename,
+                                RelativePath = filename,
+                                IsRoot = true,
+                                PartNumber = AtlasCadCore.Utility.PartNumberParser.ParseOrNull(filename),
+                                ParentPartNumber = null,
+                                NativeHandle = doc.NativeHandle,
+                            }
+                        };
+                    }
                     EnsurePlaceholderPartNumbers(native);
 
                     // Export a STEP per native file. Adapter reuses the
@@ -74,50 +110,119 @@ namespace AtlasCadCore.Forms
                     // Build one tree entry per part_number: pair native + step.
                     var byPart = BuildPerPartEntries(native, steps);
 
+                    // Pre-pass: for entries whose filename code isn't an
+                    // exact 10-char match, try resolving against atlas with
+                    // code+"00" (the convention atlas uses for the first
+                    // PRODUCTION revision of a part). If we find a match,
+                    // rewrite the entry to use the canonical part_number so
+                    // the upload attaches to the existing entry instead of
+                    // landing in missing_parts.
+                    progress.SetPhase("Resolving part_numbers against atlas…");
+                    byPart = await ResolveAgainstAtlasAsync(api, byPart);
+
                     progress.SetPhase($"Uploading {all.Count} files…");
                     var firstPass = await api.UploadPartMasterAsync(
                         tree: byPart.Select(e => (object)e.ToUploadJson()),
                         filePaths: byPart.SelectMany(e => e.AllPaths()));
 
                     int attachedFirst = firstPass.attached?.Count ?? 0;
-                    var missing = firstPass.missing_parts ?? new List<MissingPartDto>();
+                    var stillMissing = firstPass.missing_parts ?? new List<MissingPartDto>();
                     int createdSecond = 0;
+                    int attachedFromPickedExisting = 0;
+                    int skipped = 0;
 
-                    if (missing.Count > 0)
+                    if (stillMissing.Count > 0)
                     {
+                        // Per missing part: ask the user Pick Existing / Create New / Skip.
                         progress.Hide();
-                        List<CreateBatchEntryDto> userEntries;
-                        using (var dlg = new AssignPartMetadataForm(missing))
+                        var toCreate = new List<MissingPartDto>();
+                        var pickedExistingRemap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var m in stillMissing)
                         {
-                            if (dlg.ShowDialog() != DialogResult.OK) return;
-                            userEntries = dlg.Result;
+                            using (var dlg = new MissingPartChoiceForm(m.part_number, m.filename, api))
+                            {
+                                dlg.ShowDialog();
+                                switch (dlg.Choice)
+                                {
+                                    case MissingPartChoiceForm.ChoiceKind.UseExisting:
+                                        if (!string.IsNullOrEmpty(dlg.PickedExistingPartNumber))
+                                            pickedExistingRemap[m.part_number] = dlg.PickedExistingPartNumber;
+                                        else
+                                            skipped++;
+                                        break;
+                                    case MissingPartChoiceForm.ChoiceKind.CreateNew:
+                                        toCreate.Add(m);
+                                        break;
+                                    default:
+                                        skipped++;
+                                        break;
+                                }
+                            }
                         }
                         progress.Show();
-                        progress.SetPhase($"Creating {userEntries.Count} new part_master entries…");
-                        var created = await api.CreateBatchAsync(userEntries);
-                        var remap = (created?.created ?? new List<CreatedEntryDto>())
-                            .Where(c => !string.IsNullOrEmpty(c.detected_part_number))
-                            .ToDictionary(c => c.detected_part_number, c => c.new_part_number);
 
-                        // Build the subset tree for the just-created parts with
-                        // their newly-minted part_numbers, then re-upload.
-                        var subset = byPart
-                            .Where(e => remap.ContainsKey(e.PartNumber))
-                            .Select(e => e.WithPartNumber(remap[e.PartNumber]))
-                            .ToList();
-                        progress.SetPhase($"Uploading {subset.Sum(e => e.AllPaths().Count())} files for new parts…");
-                        var secondPass = await api.UploadPartMasterAsync(
-                            tree: subset.Select(e => (object)e.ToUploadJson()),
-                            filePaths: subset.SelectMany(e => e.AllPaths()));
-                        createdSecond = secondPass.attached?.Count ?? 0;
+                        // Attach to existing part_numbers the user picked.
+                        if (pickedExistingRemap.Count > 0)
+                        {
+                            var subset = byPart
+                                .Where(e => pickedExistingRemap.ContainsKey(e.PartNumber))
+                                .Select(e => e.WithPartNumber(pickedExistingRemap[e.PartNumber]))
+                                .ToList();
+                            progress.SetPhase($"Uploading {subset.Count} file(s) against existing part_numbers…");
+                            var pass = await api.UploadPartMasterAsync(
+                                tree: subset.Select(e => (object)e.ToUploadJson()),
+                                filePaths: subset.SelectMany(e => e.AllPaths()));
+                            attachedFromPickedExisting = pass?.attached?.Count ?? 0;
+                        }
+
+                        // Mint fresh part_numbers for the ones the user chose to create.
+                        if (toCreate.Count > 0)
+                        {
+                            progress.Hide();
+                            List<CreateBatchEntryDto> userEntries;
+                            using (var dlg = new AssignPartMetadataForm(toCreate))
+                            {
+                                if (dlg.ShowDialog() != DialogResult.OK)
+                                {
+                                    skipped += toCreate.Count;
+                                }
+                                else
+                                {
+                                    userEntries = dlg.Result;
+                                    progress.Show();
+                                    progress.SetPhase($"Creating {userEntries.Count} new part_master entries…");
+                                    var created = await api.CreateBatchAsync(userEntries);
+                                    var remap = (created?.created ?? new List<CreatedEntryDto>())
+                                        .Where(c => !string.IsNullOrEmpty(c.detected_part_number))
+                                        .ToDictionary(c => c.detected_part_number, c => c.new_part_number);
+
+                                    var subset = byPart
+                                        .Where(e => remap.ContainsKey(e.PartNumber))
+                                        .Select(e => e.WithPartNumber(remap[e.PartNumber]))
+                                        .ToList();
+                                    progress.SetPhase($"Uploading {subset.Sum(e => e.AllPaths().Count())} files for new parts…");
+                                    var secondPass = await api.UploadPartMasterAsync(
+                                        tree: subset.Select(e => (object)e.ToUploadJson()),
+                                        filePaths: subset.SelectMany(e => e.AllPaths()));
+                                    createdSecond = secondPass.attached?.Count ?? 0;
+                                }
+                            }
+                            if (!progress.Visible) progress.Show();
+                        }
                     }
 
                     progress.Done();
-                    MessageBox.Show(
-                        $"Upload complete.\n\n" +
-                        $"Attached to existing part_master entries: {attachedFirst}\n" +
-                        $"New entries created + attached: {createdSecond}\n" +
-                        (missing.Count > createdSecond ? $"Skipped (cancelled metadata): {missing.Count - createdSecond}\n" : ""),
+                    var summaryText = new System.Text.StringBuilder();
+                    summaryText.AppendLine("Upload complete.");
+                    summaryText.AppendLine();
+                    summaryText.AppendLine($"Attached to existing part_master entries (auto): {attachedFirst}");
+                    if (attachedFromPickedExisting > 0)
+                        summaryText.AppendLine($"Attached to existing part_master entries (you picked): {attachedFromPickedExisting}");
+                    if (createdSecond > 0)
+                        summaryText.AppendLine($"New entries created + attached: {createdSecond}");
+                    if (skipped > 0)
+                        summaryText.AppendLine($"Skipped: {skipped}");
+                    MessageBox.Show(summaryText.ToString(),
                         "Atlas — Upload to Part Master",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
@@ -140,6 +245,69 @@ namespace AtlasCadCore.Forms
                 if (!string.IsNullOrEmpty(e.PartNumber)) continue;
                 e.PartNumber = Path.GetFileNameWithoutExtension(e.Filename ?? "").ToUpperInvariant();
             }
+        }
+
+        /// <summary>
+        /// Pre-pass before /upload: for each entry whose part_number isn't a
+        /// strict 10-char code, try resolving it against atlas with
+        /// code+"00" exact match (atlas's first PRODUCTION revision
+        /// convention). When a match is found, rewrite the entry to use the
+        /// canonical atlas part_number so the upload attaches to the
+        /// existing entry instead of landing in missing_parts.
+        /// </summary>
+        private static async Task<List<PartEntry>> ResolveAgainstAtlasAsync(
+            AtlasApiClient api, List<PartEntry> entries)
+        {
+            if (entries == null || entries.Count == 0) return entries;
+            var result = new List<PartEntry>(entries.Count);
+            foreach (var e in entries)
+            {
+                string canonical = null;
+                if (!string.IsNullOrEmpty(e.PartNumber) && e.PartNumber.Length < 10)
+                {
+                    string padded = e.PartNumber + "00";
+                    canonical = await TryExactMatchAsync(api, padded);
+                }
+                if (canonical != null && !string.Equals(canonical, e.PartNumber, StringComparison.OrdinalIgnoreCase))
+                {
+                    result.Add(e.WithPartNumber(canonical));
+                }
+                else
+                {
+                    result.Add(e);
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Search atlas for an exact part_number match. Returns the canonical
+        /// part_number if a doc has a revision (any release_type) whose
+        /// part_number equals `candidate`, otherwise null.
+        /// </summary>
+        private static async Task<string> TryExactMatchAsync(AtlasApiClient api, string candidate)
+        {
+            try
+            {
+                var page = await api.ListPartMasterAsync(
+                    releaseType: null, search: candidate, page: 1, limit: 50);
+                foreach (var d in page?.items ?? new List<PartMasterDocumentDto>())
+                {
+                    if (d.releases == null) continue;
+                    foreach (var bucket in d.releases.Values)
+                    {
+                        if (bucket == null) continue;
+                        foreach (var rev in bucket)
+                        {
+                            if (rev?.part_number == null) continue;
+                            if (string.Equals(rev.part_number, candidate, StringComparison.OrdinalIgnoreCase))
+                                return rev.part_number;
+                        }
+                    }
+                }
+            }
+            catch { }
+            return null;
         }
 
         private static List<PartEntry> BuildPerPartEntries(

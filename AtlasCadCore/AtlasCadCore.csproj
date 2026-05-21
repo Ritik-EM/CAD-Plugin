@@ -59,6 +59,8 @@
     <Compile Include="Forms\ContributeNativeFileForm.cs" />
     <Compile Include="Forms\LoginForm.cs" />
     <Compile Include="Forms\MissingChildUploadForm.cs" />
+    <Compile Include="Forms\MissingPartChoiceForm.cs" />
+    <Compile Include="Forms\PartMasterPickerDialog.cs" />
     <Compile Include="Forms\ProgressForm.cs" />
     <Compile Include="Forms\ResolveFromAtlasFlow.cs" />
     <Compile Include="Forms\UploadToPartMasterForm.cs" />
