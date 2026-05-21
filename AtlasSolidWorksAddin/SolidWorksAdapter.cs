@@ -74,8 +74,10 @@ namespace AtlasCadPlugin.SolidWorks
             // failures are silently ignored so logging never breaks the walk.
             try
             {
+                // Fully-qualify System.Environment — SolidWorks.Interop.sldworks
+                // exposes its own Environment interface that otherwise shadows it.
                 string logDir = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
                     "AtlasCad");
                 Directory.CreateDirectory(logDir);
                 File.AppendAllText(
