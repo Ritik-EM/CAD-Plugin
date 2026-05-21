@@ -257,6 +257,116 @@ namespace AtlasCadCore.Forms
                         return;
                     }
 
+                    // Pre-validate every part_number against part_master_library
+                    // BEFORE we open the propagation dialog. If any are unknown
+                    // to atlas (legacy parts, parts added in SW but never
+                    // uploaded), the backend would return a 400 with a raw
+                    // JSON message ("Tree references unknown part_numbers:
+                    // [...]") that's hard to act on. Surface them here with
+                    // their filenames + a clear "Upload to Atlas first" hint.
+                    progress.SetPhase("Validating part_numbers against atlas…");
+                    PartLookupResult lookup;
+                    try
+                    {
+                        lookup = await api.LookupPartNumbersAsync(
+                            entries.Select(e => e.PartNumber).ToList());
+                    }
+                    catch (Exception ex)
+                    {
+                        progress.Hide();
+                        MessageBox.Show(
+                            "Couldn't validate part_numbers against atlas:\n\n" + ex.Message +
+                            "\n\nNetwork or auth issue. Check connection and try again.",
+                            "Atlas — Check In",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
+                    if (lookup?.missing != null && lookup.missing.Count > 0)
+                    {
+                        progress.Hide();
+                        var missingSet = new HashSet<string>(lookup.missing, StringComparer.OrdinalIgnoreCase);
+                        var missingDetails = entries
+                            .Where(e => missingSet.Contains(e.PartNumber))
+                            .ToList();
+
+                        // Friendly first prompt — list the missing parts and
+                        // offer to create them inline. Yes routes the user
+                        // into AssignPartMetadataForm + /create-batch, the
+                        // same flow Upload to Atlas uses for missing parts.
+                        var msg = new StringBuilder();
+                        msg.AppendLine(
+                            $"{missingDetails.Count} part(s) in this assembly aren't registered in atlas yet:");
+                        msg.AppendLine();
+                        foreach (var e in missingDetails.Take(20))
+                            msg.AppendLine($"  • {e.PartNumber}   ({e.NativeFilename})");
+                        if (missingDetails.Count > 20)
+                            msg.AppendLine($"  … {missingDetails.Count - 20} more");
+                        msg.AppendLine();
+                        msg.AppendLine("Create them now? You'll fill in project / vehicle / group /");
+                        msg.AppendLine("release_type for each (same form Upload to Atlas uses) and");
+                        msg.AppendLine("Check In will continue once they're created.");
+                        msg.AppendLine();
+                        msg.AppendLine("No = cancel Check In (your checkout lock stays held).");
+
+                        var resp = MessageBox.Show(msg.ToString(),
+                            "Atlas — Check In: unknown part_numbers",
+                            MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                        if (resp != DialogResult.Yes) return;
+
+                        // Build MissingPartDto list for the metadata form.
+                        // detected_description left null — user fills if needed.
+                        var missingForForm = missingDetails.Select(e => new MissingPartDto
+                        {
+                            part_number = e.PartNumber,
+                            filename = e.NativeFilename,
+                            step_filename = e.StepFilename,
+                            detected_description = null,
+                        }).ToList();
+
+                        List<CreateBatchEntryDto> toCreate;
+                        using (var metaDlg = new AssignPartMetadataForm(missingForForm))
+                        {
+                            if (metaDlg.ShowDialog() != DialogResult.OK) return;
+                            toCreate = metaDlg.Result;
+                        }
+                        if (toCreate == null || toCreate.Count == 0) return;
+
+                        progress.Show();
+                        progress.SetPhase($"Creating {toCreate.Count} part_master entries…");
+                        try
+                        {
+                            await api.CreateBatchAsync(toCreate);
+                        }
+                        catch (Exception ex)
+                        {
+                            progress.Hide();
+                            MessageBox.Show(
+                                "Failed to create the missing part_master entries:\n\n" + ex.Message,
+                                "Atlas — Check In",
+                                MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            return;
+                        }
+
+                        // Re-validate. If atlas still reports any as missing,
+                        // user must have skipped them in the form — bail with
+                        // a final clear message instead of looping forever.
+                        progress.SetPhase("Re-validating part_numbers…");
+                        var recheck = await api.LookupPartNumbersAsync(
+                            entries.Select(e => e.PartNumber).ToList());
+                        if (recheck?.missing != null && recheck.missing.Count > 0)
+                        {
+                            progress.Hide();
+                            MessageBox.Show(
+                                "Some parts still aren't registered:\n\n  " +
+                                string.Join("\n  ", recheck.missing) +
+                                "\n\nFill metadata for ALL missing parts and confirm to continue.",
+                                "Atlas — Check In",
+                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+                    }
+                    progress.Show();
+
                     // Pre-tick "Modified" for parts whose current sha256
                     // differs from the baseline captured at Check Out. The
                     // baseline is keyed by root part_number in FileHashStash;
