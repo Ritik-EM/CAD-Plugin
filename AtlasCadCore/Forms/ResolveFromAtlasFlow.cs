@@ -35,10 +35,25 @@ namespace AtlasCadCore.Forms
             AtlasApiClient api, ICadAdapter adapter, CadDocument doc,
             bool silentIfNothingMissing)
         {
-            if (doc == null || !doc.IsAssembly)
+            if (doc == null)
             {
                 if (!silentIfNothingMissing)
-                    MessageBox.Show("Open an assembly first.", "Atlas — Resolve from Atlas",
+                    MessageBox.Show("Open a file in SolidWorks first.",
+                        "Atlas — Resolve from Atlas",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            if (!doc.IsAssembly)
+            {
+                if (!silentIfNothingMissing)
+                    MessageBox.Show(
+                        "Resolve from Atlas only applies to assemblies — it " +
+                        "downloads missing child files from atlas for the " +
+                        "currently open .sldasm.\n\n" +
+                        "The active document is a single part. If you want " +
+                        "to push it to atlas, use the “Upload to Atlas” " +
+                        "ribbon button instead.",
+                        "Atlas — Resolve from Atlas",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                 return;
             }

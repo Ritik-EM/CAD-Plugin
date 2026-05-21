@@ -236,14 +236,21 @@ namespace AtlasCadCore.Forms
 
         private static void EnsurePlaceholderPartNumbers(List<AssemblyFileRef> entries)
         {
-            // For files whose filename doesn't match the 10-char part_number
-            // pattern, fall back to the bare filename (uppercased) as the
-            // "detected" part_number. The backend will report these in
-            // missing_parts and the user will fill metadata to mint real ones.
+            // For files whose filename doesn't match the strict 10-char
+            // part_number pattern, fall back through two stages:
+            //   1. extract the leading alphanumeric code (e.g. "EL530012"
+            //      from "EL530012_HEXAGON WELD NUT...sldprt") — this gives
+            //      the ResolveAgainstAtlasAsync pre-pass a clean stem to
+            //      pad with "00" and look up in atlas
+            //   2. if even that fails, last-resort to the bare filename
+            //      uppercased so the chooser dialog has *something* to show
             foreach (var e in entries)
             {
                 if (!string.IsNullOrEmpty(e.PartNumber)) continue;
-                e.PartNumber = Path.GetFileNameWithoutExtension(e.Filename ?? "").ToUpperInvariant();
+                e.PartNumber = AtlasCadCore.Utility.PartNumberParser
+                                   .ExtractLeadingCode(e.Filename)
+                    ?? Path.GetFileNameWithoutExtension(e.Filename ?? "")
+                           .ToUpperInvariant();
             }
         }
 
