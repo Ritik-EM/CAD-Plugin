@@ -69,12 +69,52 @@ namespace AtlasCadCore.Forms
                 {
                     adapter.SaveDocument(doc);
 
-                    progress.SetPhase("Walking assembly tree…");
-                    var native = adapter.WalkAssembly(doc) ?? new List<AssemblyFileRef>();
+                    // Both assemblies and single parts go through check-in.
+                    // For an assembly we walk its tree; for a single .sldprt
+                    // we synthesise a one-entry list of the active doc so
+                    // the user can check in a single part — or check in
+                    // with no changes ticked so the lock just gets released.
+                    List<AssemblyFileRef> native;
+                    if (doc.IsAssembly)
+                    {
+                        progress.SetPhase("Walking assembly tree…");
+                        native = adapter.WalkAssembly(doc) ?? new List<AssemblyFileRef>();
+                    }
+                    else
+                    {
+                        progress.SetPhase("Reading active part…");
+                        string filename = Path.GetFileName(doc.FullPath ?? "");
+                        if (string.IsNullOrEmpty(doc.FullPath) || string.IsNullOrEmpty(filename))
+                        {
+                            MessageBox.Show(
+                                "The active part hasn't been saved to disk yet. " +
+                                "Save it (Ctrl+S) and try again.",
+                                "Atlas — Check In",
+                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            return;
+                        }
+                        native = new List<AssemblyFileRef>
+                        {
+                            new AssemblyFileRef
+                            {
+                                FullPath = doc.FullPath,
+                                Filename = filename,
+                                RelativePath = filename,
+                                IsRoot = true,
+                                // The tracked part_number is the source of truth for
+                                // the active doc's identity — use it directly instead
+                                // of re-parsing the filename (which may have lost the
+                                // canonical part_number suffix).
+                                PartNumber = rootPartNumber,
+                                ParentPartNumber = null,
+                                NativeHandle = doc.NativeHandle,
+                            }
+                        };
+                    }
                     if (native.Count == 0)
                     {
                         Beep();
-                        MessageBox.Show("Tree is empty — nothing to check in.", "Atlas",
+                        MessageBox.Show("Nothing to check in.", "Atlas",
                             MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }

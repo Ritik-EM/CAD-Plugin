@@ -152,6 +152,11 @@ namespace AtlasCadCore.ApiClient
         public string locked_at;
     }
 
+    public class MyCheckoutsDto
+    {
+        public List<CheckoutResultDto> checkouts;
+    }
+
     public class S3PresignedDownloadDto
     {
         public string url;

@@ -37,7 +37,8 @@ namespace AtlasCadPlugin.SolidWorks
         private const int CmdIdBrowse = 2;
         private const int CmdIdCheckin = 3;
         private const int CmdIdResolve = 4;
-        private const int CmdIdSignOut = 5;
+        private const int CmdIdMyCheckouts = 5;
+        private const int CmdIdSignOut = 6;
 
         private const string AtlasBaseUrl = "http://192.168.1.39:8000";
         private const string OctopusBaseUrl = "https://octopus.eulerlogistics.com";
@@ -98,6 +99,8 @@ namespace AtlasCadPlugin.SolidWorks
                 "Check In", 0, nameof(OnCheckinClicked), "", CmdIdCheckin, both);
             g.AddCommandItem2("Resolve from Atlas", -1, "Download missing child files for the open assembly from atlas",
                 "Resolve", 0, nameof(OnResolveClicked), "", CmdIdResolve, both);
+            g.AddCommandItem2("My Checkouts", -1, "Show parts you have checked out and release locks",
+                "My Checkouts", 0, nameof(OnMyCheckoutsClicked), "", CmdIdMyCheckouts, both);
             g.AddCommandItem2("Sign Out", -1, "Clear stored token and sign in as a different user",
                 "Sign Out", 0, nameof(OnSignOutClicked), "", CmdIdSignOut, both);
 
@@ -150,6 +153,20 @@ namespace AtlasCadPlugin.SolidWorks
         public void OnCheckinClicked() => _ = Run(() => CheckinFlow.RunAsync(_api, _adapter));
 
         public void OnResolveClicked() => _ = Run(() => ResolveFromAtlasFlow.RunAsync(_api, _adapter));
+
+        public void OnMyCheckoutsClicked()
+        {
+            try
+            {
+                using (var form = new MyCheckoutsForm(_api)) { form.ShowDialog(); }
+            }
+            catch (UnauthorizedException) { HandleUnauthorized(); }
+            catch (Exception ex)
+            {
+                MessageBox.Show("My Checkouts failed:\n\n" + ex, "Atlas",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
 
         public void OnSignOutClicked()
         {

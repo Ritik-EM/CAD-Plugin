@@ -111,6 +111,13 @@ namespace AtlasCadCore.ApiClient
             return JsonConvert.DeserializeObject<ApiEnvelope<PaginatedDto<PartMasterDocumentDto>>>(body).data;
         }
 
+        public async Task<MyCheckoutsDto> MyCheckoutsAsync()
+        {
+            var req = NewRequest(HttpMethod.Get, "/api/v1/cad/part-master/my-checkouts");
+            string body = await SendAsync(req, "My checkouts");
+            return JsonConvert.DeserializeObject<ApiEnvelope<MyCheckoutsDto>>(body).data;
+        }
+
         public async Task<CheckoutResultDto> CheckoutPartMasterAsync(string partNumber)
         {
             var req = NewRequest(HttpMethod.Post, $"/api/v1/cad/part-master/{Uri.EscapeDataString(partNumber)}/checkout");

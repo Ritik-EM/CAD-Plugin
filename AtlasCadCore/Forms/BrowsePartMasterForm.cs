@@ -33,6 +33,7 @@ namespace AtlasCadCore.Forms
         private Button _cancelCheckoutBtn;
         private Button _contributeBtn;
         private ToolTip _checkoutTip;
+        private ComboBox _revisionCombo;
         // Set once a STP-only part has been opened in this session, so we
         // only nag the user with the "imported geometry, no design intent"
         // info once per dialog instance.
@@ -174,20 +175,35 @@ namespace AtlasCadCore.Forms
                 Font = new Font(Font, FontStyle.Bold),
             };
 
-            var actionPanel = new Panel { Dock = DockStyle.Bottom, Height = 120 };
-            _openBtn = new Button { Text = "Open in " + _adapter.CadName, Location = new Point(0, 4), Width = 150, Enabled = false };
+            var actionPanel = new Panel { Dock = DockStyle.Bottom, Height = 156 };
+            // Revision picker — defaults to the active revision but the user
+            // can choose any historical revision to act against (Check Out
+            // an older revision to branch from it, Open an older revision
+            // to compare, etc.). Populated in OnSelectionChanged.
+            var revLabel = new Label { Text = "Revision:", Location = new Point(0, 8), AutoSize = true };
+            actionPanel.Controls.Add(revLabel);
+            _revisionCombo = new ComboBox
+            {
+                Location = new Point(64, 4),
+                Width = 242,
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Enabled = false,
+            };
+            actionPanel.Controls.Add(_revisionCombo);
+
+            _openBtn = new Button { Text = "Open in " + _adapter.CadName, Location = new Point(0, 40), Width = 150, Enabled = false };
             _openBtn.Click += async (s, e) => await OnOpenAsync();
             actionPanel.Controls.Add(_openBtn);
-            _insertBtn = new Button { Text = "Insert into Assembly", Location = new Point(156, 4), Width = 150, Enabled = false };
+            _insertBtn = new Button { Text = "Insert into Assembly", Location = new Point(156, 40), Width = 150, Enabled = false };
             _insertBtn.Click += async (s, e) => await OnInsertAsync();
             actionPanel.Controls.Add(_insertBtn);
-            _checkoutBtn = new Button { Text = "Check Out", Location = new Point(0, 40), Width = 150, Enabled = false };
+            _checkoutBtn = new Button { Text = "Check Out", Location = new Point(0, 76), Width = 150, Enabled = false };
             _checkoutBtn.Click += async (s, e) => await OnCheckoutAsync();
             actionPanel.Controls.Add(_checkoutBtn);
-            _cancelCheckoutBtn = new Button { Text = "Cancel Checkout", Location = new Point(156, 40), Width = 150, Enabled = false };
+            _cancelCheckoutBtn = new Button { Text = "Cancel Checkout", Location = new Point(156, 76), Width = 150, Enabled = false };
             _cancelCheckoutBtn.Click += async (s, e) => await OnCancelCheckoutAsync();
             actionPanel.Controls.Add(_cancelCheckoutBtn);
-            _contributeBtn = new Button { Text = "Contribute Native File…", Location = new Point(0, 76), Width = 306, Enabled = false };
+            _contributeBtn = new Button { Text = "Contribute Native File…", Location = new Point(0, 112), Width = 306, Enabled = false };
             _contributeBtn.Click += async (s, e) => await OnContributeNativeAsync();
             actionPanel.Controls.Add(_contributeBtn);
             _checkoutTip = new ToolTip();
@@ -282,6 +298,13 @@ namespace AtlasCadCore.Forms
 
             string releaseType = _releaseTypeCombo.SelectedItem as string;
             if (releaseType == "All") releaseType = null;
+
+            // Populate the revision picker with every revision in the
+            // currently-relevant bucket(s). Default selection = the active
+            // revision; the user can switch to any historical one before
+            // clicking Open / Insert / Check Out / Contribute.
+            PopulateRevisionCombo(_selected, releaseType);
+
             var latest = LatestActiveRevision(_selected, releaseType);
             var refs = latest?.EffectiveRefs;
             bool hasFile = CountRefs(refs) > 0;
@@ -397,9 +420,17 @@ namespace AtlasCadCore.Forms
             // back into atlas as if it were a real revision, destroying the
             // design intent for everyone. The Contribute Native File flow
             // is the deliberate path for getting a real .sldprt into atlas.
-            string releaseType = _releaseTypeCombo.SelectedItem as string;
-            if (releaseType == "All") releaseType = null;
-            var rev = LatestActiveRevision(_selected, releaseType);
+            //
+            // Check the user-picked revision (not just the active one) so
+            // they can lock + edit an older revision when they explicitly
+            // chose it in the Revision dropdown.
+            var rev = RevisionByPartNumber(pn);
+            if (rev == null)
+            {
+                string releaseType = _releaseTypeCombo.SelectedItem as string;
+                if (releaseType == "All") releaseType = null;
+                rev = LatestActiveRevision(_selected, releaseType);
+            }
             if (string.IsNullOrEmpty(rev?.EffectiveRefs?.Native3dRaw))
             {
                 MessageBox.Show(
@@ -513,9 +544,84 @@ namespace AtlasCadCore.Forms
 
         private string SelectedPartNumber()
         {
+            // Honour the revision picker if the user has chosen one;
+            // otherwise fall back to the latest active revision in the
+            // current release_type bucket.
+            string picked = _revisionCombo?.SelectedItem as string;
+            if (!string.IsNullOrEmpty(picked)) return picked;
             string releaseType = _releaseTypeCombo.SelectedItem as string;
             if (releaseType == "All") releaseType = null;
             return LatestActiveRevision(_selected, releaseType)?.part_number;
+        }
+
+        /// <summary>
+        /// Find the specific revision object for a given part_number under
+        /// the currently-selected doc. Used to grab reference_documents for
+        /// the user-picked revision (not just the active one) when running
+        /// Open / Insert / Check Out.
+        /// </summary>
+        private PartMasterRevisionDto RevisionByPartNumber(string partNumber)
+        {
+            if (string.IsNullOrEmpty(partNumber) || _selected?.releases == null) return null;
+            foreach (var bucket in _selected.releases.Values)
+            {
+                if (bucket == null) continue;
+                foreach (var rev in bucket)
+                {
+                    if (string.Equals(rev?.part_number, partNumber, StringComparison.OrdinalIgnoreCase))
+                        return rev;
+                }
+            }
+            return null;
+        }
+
+        private void PopulateRevisionCombo(PartMasterDocumentDto doc, string preferredReleaseType)
+        {
+            _revisionCombo.Items.Clear();
+            _revisionCombo.Enabled = false;
+            if (doc?.releases == null) return;
+
+            // Build the list in revision order: walk every bucket, prefer
+            // the preferredReleaseType first (so its revisions appear
+            // before others), and within a bucket keep the natural order
+            // (oldest first, which means newest last — but selection
+            // defaults to the active one, see below).
+            var ordered = new List<PartMasterRevisionDto>();
+            void AddBucket(string rt)
+            {
+                if (!doc.releases.TryGetValue(rt, out var bucket) || bucket == null) return;
+                foreach (var rev in bucket)
+                    if (rev?.part_number != null) ordered.Add(rev);
+            }
+            if (!string.IsNullOrEmpty(preferredReleaseType))
+            {
+                AddBucket(preferredReleaseType);
+                foreach (var rt in new[] { "PRODUCTION", "PROTO", "ALTERNATE_PART" })
+                    if (!string.Equals(rt, preferredReleaseType, StringComparison.OrdinalIgnoreCase))
+                        AddBucket(rt);
+            }
+            else
+            {
+                foreach (var rt in new[] { "PRODUCTION", "PROTO", "ALTERNATE_PART" })
+                    AddBucket(rt);
+            }
+
+            // Display label: "AN5T01050B  (active)" or "AN5T01050A".
+            string activePn = null;
+            foreach (var rev in ordered)
+            {
+                if (rev.active == true) { activePn = rev.part_number; break; }
+            }
+
+            foreach (var rev in ordered)
+                _revisionCombo.Items.Add(rev.part_number);
+
+            if (_revisionCombo.Items.Count > 0)
+            {
+                _revisionCombo.Enabled = true;
+                int activeIdx = activePn != null ? _revisionCombo.Items.IndexOf(activePn) : -1;
+                _revisionCombo.SelectedIndex = activeIdx >= 0 ? activeIdx : 0;
+            }
         }
 
         /// <summary>Download the file that best matches the current CAD's native
@@ -534,9 +640,15 @@ namespace AtlasCadCore.Forms
         /// </summary>
         private async Task<PickedDownload> PickAndDownloadAsync(string partNumber, bool prefersNative)
         {
-            string releaseType = _releaseTypeCombo.SelectedItem as string;
-            if (releaseType == "All") releaseType = null;
-            var rev = LatestActiveRevision(_selected, releaseType);
+            // Use the user-picked revision when available, falling back to
+            // the latest active in the current release_type bucket.
+            var rev = RevisionByPartNumber(partNumber);
+            if (rev == null)
+            {
+                string releaseType = _releaseTypeCombo.SelectedItem as string;
+                if (releaseType == "All") releaseType = null;
+                rev = LatestActiveRevision(_selected, releaseType);
+            }
             var refs = rev?.EffectiveRefs;
             if (refs == null) return null;
 
