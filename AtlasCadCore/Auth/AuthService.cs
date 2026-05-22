@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.Tasks;
+using AtlasCadCore.Utility;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -19,7 +20,19 @@ namespace AtlasCadCore.Auth
     /// </summary>
     public class AuthService
     {
-        private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+        private static readonly HttpClient _http = CreateHttpClient();
+
+        private static HttpClient CreateHttpClient()
+        {
+            var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            // CloudFront / AWS WAF blocks requests with no User-Agent. Set
+            // one matching what AtlasApiClient sends so the auth call passes
+            // the edge in prod (it was returning a 403 HTML page from
+            // CloudFront otherwise — looked like an atlas-api failure).
+            http.DefaultRequestHeaders.UserAgent.ParseAdd(
+                $"AtlasCadPlugin/{PluginVersion.Current?.ToString(3) ?? "dev"} (.NET 4.8; SolidWorks)");
+            return http;
+        }
         private readonly string _tokenUrl;
 
         public AuthService(string octopusBaseUrl)

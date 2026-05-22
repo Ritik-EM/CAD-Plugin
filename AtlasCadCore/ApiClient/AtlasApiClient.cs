@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Threading.Tasks;
 using AtlasCadCore.Auth;
+using AtlasCadCore.Utility;
 using Newtonsoft.Json;
 
 namespace AtlasCadCore.ApiClient
@@ -21,7 +22,19 @@ namespace AtlasCadCore.ApiClient
     /// </summary>
     public class AtlasApiClient
     {
-        private static readonly HttpClient _http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        private static readonly HttpClient _http = CreateHttpClient();
+
+        private static HttpClient CreateHttpClient()
+        {
+            var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            // CloudFront / AWS WAF in front of prod atlas-api blocks requests
+            // with no User-Agent (the .NET HttpClient default) as bot traffic.
+            // A descriptive UA both passes the edge AND lets backend access
+            // logs attribute calls to a specific plugin build.
+            http.DefaultRequestHeaders.UserAgent.ParseAdd(
+                $"AtlasCadPlugin/{PluginVersion.Current?.ToString(3) ?? "dev"} (.NET 4.8; SolidWorks)");
+            return http;
+        }
 
         public string BaseUrl { get; private set; }
 
