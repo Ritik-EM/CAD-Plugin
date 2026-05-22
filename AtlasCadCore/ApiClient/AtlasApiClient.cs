@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -23,16 +24,31 @@ namespace AtlasCadCore.ApiClient
     public class AtlasApiClient
     {
         private static readonly HttpClient _http = CreateHttpClient();
+        // Separate client for direct-to-S3 PUTs (the presigned-upload flow).
+        // S3 doesn't need Bearer/X-Atlas-Plugin and adding them might mismatch
+        // the presigned signature; isolate so the atlas-api defaults don't
+        // leak into the S3 request. Longer timeout for big multi-MB uploads.
+        private static readonly HttpClient _s3Http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
 
         private static HttpClient CreateHttpClient()
         {
             var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            string ver = PluginVersion.Current?.ToString(3) ?? "dev";
             // CloudFront / AWS WAF in front of prod atlas-api blocks requests
             // with no User-Agent (the .NET HttpClient default) as bot traffic.
-            // A descriptive UA both passes the edge AND lets backend access
-            // logs attribute calls to a specific plugin build.
+            // A descriptive UA both passes the basic bot rules AND lets
+            // backend access logs attribute calls to a specific plugin build.
             http.DefaultRequestHeaders.UserAgent.ParseAdd(
-                $"AtlasCadPlugin/{PluginVersion.Current?.ToString(3) ?? "dev"} (.NET 4.8; SolidWorks)");
+                $"AtlasCadPlugin/{ver} (.NET 4.8; SolidWorks)");
+            // X-Atlas-Plugin is the *canonical* signal for "this came from the
+            // CAD plugin, not a browser". Cleaner WAF allow-list than UA
+            // substring matching — AWS team can add a single rule
+            //   `header X-Atlas-Plugin starts-with "AtlasCadPlugin/" → ALLOW`
+            // that covers every endpoint. File bytes themselves now bypass
+            // CloudFront entirely via direct-to-S3 PUTs (see PresignUploadAsync
+            // + PutFileToS3Async) so WAF only ever sees small JSON requests.
+            http.DefaultRequestHeaders.Add("X-Atlas-Plugin", $"AtlasCadPlugin/{ver}");
+            http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
             return http;
         }
 
@@ -145,32 +161,34 @@ namespace AtlasCadCore.ApiClient
         }
 
         /// <summary>
-        /// First-time upload. `tree` is a flat list of UploadTreeEntry payload
-        /// objects (anonymous types are fine — they get JSON-serialised) and
-        /// `filePaths` is the set of local files referenced by the tree.
-        ///
-        /// `releaseNewRevision` (default false) attaches each uploaded file
-        /// to the existing active revision of its part_number. When true,
-        /// the backend mints a fresh revision per entry before attaching —
-        /// OTP must be supplied in that case.
+        /// First-time upload using the presigned-PUT flow.
+        ///   1. Ask atlas-api for a session_id + one presigned URL per distinct filename.
+        ///   2. PUT each file's bytes directly to S3 (bypasses CloudFront).
+        ///   3. POST /cad/part-master/upload with session_id + tree (tiny JSON body).
+        /// File bytes never traverse atlas-api or CloudFront, so WAF only sees
+        /// small JSON requests it has no reason to block.
         /// </summary>
         public async Task<UploadResultDto> UploadPartMasterAsync(
             IEnumerable<object> tree, IEnumerable<string> filePaths,
             bool releaseNewRevision = false, string otp = null)
         {
-            using (var content = BuildTreeMultipart(tree, filePaths))
+            var pathList = filePaths?.Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
+                                    .ToList() ?? new List<string>();
+            string sessionId = await StageFilesAsync(pathList, "Upload to part-master");
+
+            var payload = new
             {
-                if (releaseNewRevision)
-                {
-                    content.Add(new StringContent("true"), "release_new_revision");
-                    if (!string.IsNullOrEmpty(otp))
-                        content.Add(new StringContent(otp), "otp");
-                }
-                var req = NewRequest(HttpMethod.Post, "/api/v1/cad/part-master/upload");
-                req.Content = content;
-                string body = await SendAsync(req, "Upload to part-master");
-                return JsonConvert.DeserializeObject<ApiEnvelope<UploadResultDto>>(body).data;
-            }
+                session_id = sessionId,
+                tree = tree,
+                release_new_revision = releaseNewRevision,
+                otp = otp ?? "",
+            };
+            var req = NewRequest(HttpMethod.Post, "/api/v1/cad/part-master/upload");
+            req.Content = new StringContent(
+                JsonConvert.SerializeObject(payload),
+                System.Text.Encoding.UTF8, "application/json");
+            string body = await SendAsync(req, "Upload to part-master");
+            return JsonConvert.DeserializeObject<ApiEnvelope<UploadResultDto>>(body).data;
         }
 
         public async Task<CheckinPreviewResultDto> CheckinPreviewAsync(
@@ -189,17 +207,86 @@ namespace AtlasCadCore.ApiClient
             string rootPartNumber, IEnumerable<object> tree, string releaseType,
             List<string> changed, string comment, string otp, IEnumerable<string> filePaths)
         {
-            using (var content = BuildTreeMultipart(tree, filePaths))
+            var pathList = filePaths?.Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
+                                    .ToList() ?? new List<string>();
+            string sessionId = await StageFilesAsync(pathList, "Checkin");
+
+            var payload = new
             {
-                content.Add(new StringContent(releaseType), "release_type");
-                content.Add(new StringContent(otp ?? ""), "otp");
-                content.Add(new StringContent(JsonConvert.SerializeObject(changed ?? new List<string>())), "changed_json");
-                content.Add(new StringContent(comment ?? ""), "comment");
-                var req = NewRequest(HttpMethod.Post,
-                    $"/api/v1/cad/part-master/{Uri.EscapeDataString(rootPartNumber)}/checkin");
-                req.Content = content;
-                string body = await SendAsync(req, "Checkin");
-                return JsonConvert.DeserializeObject<ApiEnvelope<CheckinResultDto>>(body).data;
+                session_id = sessionId,
+                tree = tree,
+                release_type = releaseType,
+                changed = changed ?? new List<string>(),
+                comment = comment ?? "",
+                otp = otp ?? "",
+            };
+            var req = NewRequest(HttpMethod.Post,
+                $"/api/v1/cad/part-master/{Uri.EscapeDataString(rootPartNumber)}/checkin");
+            req.Content = new StringContent(
+                JsonConvert.SerializeObject(payload),
+                System.Text.Encoding.UTF8, "application/json");
+            string body = await SendAsync(req, "Checkin");
+            return JsonConvert.DeserializeObject<ApiEnvelope<CheckinResultDto>>(body).data;
+        }
+
+        /// <summary>
+        /// Presign + PUT-to-S3 for every distinct file in filePaths.
+        /// Returns the session_id the caller must pass to the finalize endpoint.
+        /// </summary>
+        public async Task<string> StageFilesAsync(IEnumerable<string> filePaths, string operation)
+        {
+            // De-dup by filename — the backend keys staging by filename within
+            // a session, so uploading the same one twice would just overwrite.
+            var byName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var path in filePaths ?? Enumerable.Empty<string>())
+            {
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
+                string filename = Path.GetFileName(path);
+                if (!byName.ContainsKey(filename)) byName[filename] = path;
+            }
+            var presign = await PresignUploadAsync(byName.Keys.ToList());
+            if (presign?.uploads == null)
+                throw new InvalidOperationException($"{operation}: presign returned no upload slots");
+
+            // Upload all files in parallel — each PUT goes direct to S3 so
+            // there's no atlas-api bottleneck to serialise against.
+            var puts = presign.uploads
+                .Where(u => !string.IsNullOrEmpty(u.presigned_url) && byName.ContainsKey(u.filename))
+                .Select(u => PutFileToS3Async(u.presigned_url, byName[u.filename]))
+                .ToList();
+            await Task.WhenAll(puts);
+            return presign.session_id;
+        }
+
+        public async Task<PresignUploadResultDto> PresignUploadAsync(List<string> filenames)
+        {
+            var req = NewRequest(HttpMethod.Post, "/api/v1/cad/files/presign-upload");
+            req.Content = new StringContent(
+                JsonConvert.SerializeObject(new { filenames }),
+                System.Text.Encoding.UTF8, "application/json");
+            string body = await SendAsync(req, "Presign upload");
+            return JsonConvert.DeserializeObject<ApiEnvelope<PresignUploadResultDto>>(body).data;
+        }
+
+        /// <summary>
+        /// PUT a single file's bytes directly to a presigned S3 URL. Uses
+        /// the dedicated _s3Http client so no atlas-api headers (Bearer,
+        /// X-Atlas-Plugin) leak into the request — AWS signs only specific
+        /// headers and unrelated ones can mismatch the signature.
+        /// </summary>
+        public async Task PutFileToS3Async(string presignedUrl, string filePath)
+        {
+            using (var stream = OpenSharedRead(filePath))
+            using (var content = new StreamContent(stream))
+            using (var req = new HttpRequestMessage(HttpMethod.Put, presignedUrl) { Content = content })
+            {
+                var resp = await _s3Http.SendAsync(req);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    string errBody = await resp.Content.ReadAsStringAsync();
+                    throw new HttpRequestException(
+                        $"S3 PUT failed ({(int)resp.StatusCode}) for {Path.GetFileName(filePath)}: {errBody}");
+                }
             }
         }
 
@@ -232,31 +319,10 @@ namespace AtlasCadCore.ApiClient
             return JsonConvert.DeserializeObject<ApiEnvelope<CreateBatchResultDto>>(body).data;
         }
 
-        /// <summary>
-        /// Multipart helper shared by upload + checkin. Adds `tree_json` as
-        /// the serialised tree and one `files` part per referenced local file.
-        /// Caller is responsible for any extra form fields (release_type, etc.)
-        /// which they can add to the returned content before sending.
-        /// </summary>
-        internal MultipartFormDataContent BuildTreeMultipart(
-            IEnumerable<object> tree, IEnumerable<string> filePaths)
-        {
-            var content = new MultipartFormDataContent();
-            content.Add(new StringContent(JsonConvert.SerializeObject(tree)), "tree_json");
-
-            // De-dup by filename — the backend matches files-to-entries by
-            // bare filename, so uploading the same one twice would shadow.
-            var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var path in filePaths)
-            {
-                if (string.IsNullOrEmpty(path) || !File.Exists(path)) continue;
-                string filename = Path.GetFileName(path);
-                if (!added.Add(filename)) continue;
-                var stream = OpenSharedRead(path);
-                content.Add(new StreamContent(stream), "files", filename);
-            }
-            return content;
-        }
+        // BuildTreeMultipart removed — the upload + checkin flows no longer
+        // send multipart bodies through atlas-api. Bytes go direct to S3 via
+        // presigned PUTs and the finalize endpoints take JSON. See
+        // StageFilesAsync / PutFileToS3Async / PresignUploadAsync.
 
         public async Task<string> GetS3DownloadUrlAsync(string s3Key)
         {

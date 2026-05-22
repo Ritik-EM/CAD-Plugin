@@ -25,12 +25,14 @@ namespace AtlasCadCore.Auth
         private static HttpClient CreateHttpClient()
         {
             var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-            // CloudFront / AWS WAF blocks requests with no User-Agent. Set
-            // one matching what AtlasApiClient sends so the auth call passes
-            // the edge in prod (it was returning a 403 HTML page from
-            // CloudFront otherwise — looked like an atlas-api failure).
+            string ver = PluginVersion.Current?.ToString(3) ?? "dev";
+            // Matches AtlasApiClient.CreateHttpClient — same UA + canonical
+            // X-Atlas-Plugin header + Accept so the auth call is treated as
+            // first-party plugin traffic by CloudFront / AWS WAF.
             http.DefaultRequestHeaders.UserAgent.ParseAdd(
-                $"AtlasCadPlugin/{PluginVersion.Current?.ToString(3) ?? "dev"} (.NET 4.8; SolidWorks)");
+                $"AtlasCadPlugin/{ver} (.NET 4.8; SolidWorks)");
+            http.DefaultRequestHeaders.Add("X-Atlas-Plugin", $"AtlasCadPlugin/{ver}");
+            http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
             return http;
         }
         private readonly string _tokenUrl;

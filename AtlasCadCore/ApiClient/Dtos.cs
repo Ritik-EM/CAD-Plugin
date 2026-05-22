@@ -163,6 +163,21 @@ namespace AtlasCadCore.ApiClient
         public string key;
     }
 
+    // ---- Presigned-upload flow ----
+
+    public class PresignUploadResultDto
+    {
+        public string session_id;
+        public List<PresignedUploadEntryDto> uploads;
+    }
+
+    public class PresignedUploadEntryDto
+    {
+        public string filename;
+        public string presigned_url;
+        public string s3_key;
+    }
+
     // ---- Upload / create-batch ----
 
     public class UploadResultDto
