@@ -11,18 +11,19 @@ using AtlasCadCore.Utility;
 namespace AtlasCadCore.Forms
 {
     /// <summary>
-    /// First-time upload orchestrator. Replaces the deleted "Upload Assembly"
-    /// flow. Sequence:
+    /// First-time upload orchestrator. Plugin is attach-only — releasing
+    /// new part_numbers happens on atlas-ui, never from the plugin. Sequence:
     ///   1. Walk active assembly tree + export STEP per native file.
     ///   2. POST /cad/part-master/upload — backend attaches files to existing
-    ///      part_master revisions, returns missing_parts.
-    ///   3. If missing_parts: show AssignPartMetadataForm → /create-batch →
-    ///      remap detected→new_part_number → repeat /upload with the renamed
-    ///      subset of the tree so the new parts get their files attached.
-    ///   4. Show summary.
+    ///      part_master revisions, returns missing_parts for unknowns.
+    ///   3. For each missing part: show MissingPartChoiceForm offering
+    ///      "Pick Existing" (attach the file to a different existing
+    ///      part_number) or "Skip".
+    ///   4. Summary lists every skipped / unreleased part_number so the user
+    ///      knows what to release on atlas-ui before re-running Upload.
     ///
     /// Despite the "Form" name in the filename, this is a static orchestrator
-    /// — the only WinForms it owns are ProgressForm + AssignPartMetadataForm,
+    /// — the only WinForms it owns are ProgressForm + MissingPartChoiceForm,
     /// invoked inline. Kept as a class (not free function) so the API surface
     /// is namespaced + testable.
     /// </summary>
@@ -133,35 +134,40 @@ namespace AtlasCadCore.Forms
 
                     int attachedFirst = firstPass.attached?.Count ?? 0;
                     var stillMissing = firstPass.missing_parts ?? new List<MissingPartDto>();
-                    int createdSecond = 0;
                     int attachedFromPickedExisting = 0;
                     int skipped = 0;
+                    // Track parts the user neither attached-to-existing nor
+                    // skipped — i.e. the ones that need to be released on
+                    // atlas-ui before re-running Upload. We list them in the
+                    // final summary so the user has an actionable next step.
+                    var unreleasedAfterPicks = new List<MissingPartDto>();
 
                     if (stillMissing.Count > 0)
                     {
-                        // Per missing part: ask the user Pick Existing / Create New / Skip.
+                        // Per missing part: ask Pick Existing / Skip. Creating
+                        // brand-new part_numbers is intentionally NOT offered
+                        // here — atlas-ui is the single source of truth for
+                        // releasing new part_numbers (metadata + reviewer
+                        // workflow). The plugin is attach-only.
                         progress.Hide();
-                        var toCreate = new List<MissingPartDto>();
                         var pickedExistingRemap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                         foreach (var m in stillMissing)
                         {
                             using (var dlg = new MissingPartChoiceForm(m.part_number, m.filename, api))
                             {
                                 dlg.ShowDialog();
-                                switch (dlg.Choice)
+                                if (dlg.Choice == MissingPartChoiceForm.ChoiceKind.UseExisting
+                                    && !string.IsNullOrEmpty(dlg.PickedExistingPartNumber))
                                 {
-                                    case MissingPartChoiceForm.ChoiceKind.UseExisting:
-                                        if (!string.IsNullOrEmpty(dlg.PickedExistingPartNumber))
-                                            pickedExistingRemap[m.part_number] = dlg.PickedExistingPartNumber;
-                                        else
-                                            skipped++;
-                                        break;
-                                    case MissingPartChoiceForm.ChoiceKind.CreateNew:
-                                        toCreate.Add(m);
-                                        break;
-                                    default:
-                                        skipped++;
-                                        break;
+                                    pickedExistingRemap[m.part_number] = dlg.PickedExistingPartNumber;
+                                }
+                                else
+                                {
+                                    // Skip OR closed-without-picking: this
+                                    // part_number needs to be released on
+                                    // atlas-ui before it can be uploaded.
+                                    unreleasedAfterPicks.Add(m);
+                                    skipped++;
                                 }
                             }
                         }
@@ -180,41 +186,6 @@ namespace AtlasCadCore.Forms
                                 filePaths: subset.SelectMany(e => e.AllPaths()));
                             attachedFromPickedExisting = pass?.attached?.Count ?? 0;
                         }
-
-                        // Mint fresh part_numbers for the ones the user chose to create.
-                        if (toCreate.Count > 0)
-                        {
-                            progress.Hide();
-                            List<CreateBatchEntryDto> userEntries;
-                            using (var dlg = new AssignPartMetadataForm(toCreate))
-                            {
-                                if (dlg.ShowDialog() != DialogResult.OK)
-                                {
-                                    skipped += toCreate.Count;
-                                }
-                                else
-                                {
-                                    userEntries = dlg.Result;
-                                    progress.Show();
-                                    progress.SetPhase($"Creating {userEntries.Count} new part_master entries…");
-                                    var created = await api.CreateBatchAsync(userEntries);
-                                    var remap = (created?.created ?? new List<CreatedEntryDto>())
-                                        .Where(c => !string.IsNullOrEmpty(c.detected_part_number))
-                                        .ToDictionary(c => c.detected_part_number, c => c.new_part_number);
-
-                                    var subset = byPart
-                                        .Where(e => remap.ContainsKey(e.PartNumber))
-                                        .Select(e => e.WithPartNumber(remap[e.PartNumber]))
-                                        .ToList();
-                                    progress.SetPhase($"Uploading {subset.Sum(e => e.AllPaths().Count())} files for new parts…");
-                                    var secondPass = await api.UploadPartMasterAsync(
-                                        tree: subset.Select(e => (object)e.ToUploadJson()),
-                                        filePaths: subset.SelectMany(e => e.AllPaths()));
-                                    createdSecond = secondPass.attached?.Count ?? 0;
-                                }
-                            }
-                            if (!progress.Visible) progress.Show();
-                        }
                     }
 
                     progress.Done();
@@ -224,10 +195,20 @@ namespace AtlasCadCore.Forms
                     summaryText.AppendLine($"Attached to existing part_master entries (auto): {attachedFirst}");
                     if (attachedFromPickedExisting > 0)
                         summaryText.AppendLine($"Attached to existing part_master entries (you picked): {attachedFromPickedExisting}");
-                    if (createdSecond > 0)
-                        summaryText.AppendLine($"New entries created + attached: {createdSecond}");
-                    if (skipped > 0)
+                    if (unreleasedAfterPicks.Count > 0)
+                    {
+                        summaryText.AppendLine();
+                        summaryText.AppendLine($"{unreleasedAfterPicks.Count} part_number(s) aren't released on atlas yet —");
+                        summaryText.AppendLine("release them on atlas-ui first, then re-run Upload:");
+                        foreach (var m in unreleasedAfterPicks.Take(50))
+                            summaryText.AppendLine($"  • {m.part_number}   ({m.filename})");
+                        if (unreleasedAfterPicks.Count > 50)
+                            summaryText.AppendLine($"  … {unreleasedAfterPicks.Count - 50} more");
+                    }
+                    else if (skipped > 0)
+                    {
                         summaryText.AppendLine($"Skipped: {skipped}");
+                    }
                     MessageBox.Show(summaryText.ToString(),
                         "Atlas — Upload to Part Master",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);

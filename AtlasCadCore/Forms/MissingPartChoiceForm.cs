@@ -8,16 +8,24 @@ namespace AtlasCadCore.Forms
     /// <summary>
     /// Small popup shown for each missing part during Upload when the
     /// pad-with-"00" pre-pass couldn't find a match in atlas. User picks
-    /// one of three paths:
+    /// one of two paths:
     ///   • Pick Existing — open PartMasterPickerDialog and attach the
     ///     uploaded file to whichever existing atlas part_number they pick
-    ///   • Create New — proceed to AssignPartMetadataForm for this row
-    ///     (the outer Upload flow handles that)
-    ///   • Skip — don't upload this part at all
+    ///   • Skip — don't upload this part. The outer Upload flow will list
+    ///     the skipped parts in its summary so the user knows what to
+    ///     release on atlas-ui before re-running Upload.
+    ///
+    /// "Create New" was intentionally removed — atlas-ui is the single
+    /// source of truth for releasing new part_numbers (metadata +
+    /// reviewer workflow). The plugin is attach-only.
     /// </summary>
     public class MissingPartChoiceForm : Form
     {
-        public enum ChoiceKind { Skip, UseExisting, CreateNew }
+        // ChoiceKind kept (rather than just bool UseExisting) so call sites
+        // can distinguish "user actively skipped" from "user closed without
+        // choosing" if we ever need to. Both currently route to the same
+        // "needs to be released on atlas-ui" bucket in the upload flow.
+        public enum ChoiceKind { Skip, UseExisting }
 
         public ChoiceKind Choice { get; private set; } = ChoiceKind.Skip;
         public string PickedExistingPartNumber { get; private set; }
@@ -25,7 +33,7 @@ namespace AtlasCadCore.Forms
         public MissingPartChoiceForm(string detectedCode, string filename, AtlasApiClient api)
         {
             Text = "Atlas — Part Not Found";
-            Size = new Size(560, 290);
+            Size = new Size(560, 280);
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MinimizeBox = false;
@@ -35,21 +43,22 @@ namespace AtlasCadCore.Forms
             {
                 Location = new Point(20, 20),
                 Width = 510,
-                Height = 90,
+                Height = 110,
                 Text =
-                    $"Atlas couldn't find a part for:\n\n" +
+                    $"This part isn't released on atlas yet:\n\n" +
                     $"   Filename:   {filename}\n" +
                     $"   Detected:   {detectedCode ?? "(none)"}\n\n" +
-                    "Choose what to do with the upload:",
+                    "You can attach the file to an EXISTING atlas part_number, " +
+                    "or Skip and release this part_number on atlas-ui first.",
             };
             Controls.Add(msg);
 
-            int by = 130;
+            int by = 150;
             var pickExisting = new Button
             {
                 Text = "Pick Existing Part…",
                 Location = new Point(20, by),
-                Width = 180, Height = 32,
+                Width = 200, Height = 32,
             };
             pickExisting.Click += (s, e) =>
             {
@@ -64,24 +73,10 @@ namespace AtlasCadCore.Forms
             };
             Controls.Add(pickExisting);
 
-            var createNew = new Button
-            {
-                Text = "Create New Part",
-                Location = new Point(210, by),
-                Width = 160, Height = 32,
-            };
-            createNew.Click += (s, e) =>
-            {
-                Choice = ChoiceKind.CreateNew;
-                DialogResult = DialogResult.OK;
-                Close();
-            };
-            Controls.Add(createNew);
-
             var skip = new Button
             {
                 Text = "Skip",
-                Location = new Point(380, by),
+                Location = new Point(430, by),
                 Width = 100, Height = 32,
                 DialogResult = DialogResult.Cancel,
             };
@@ -96,12 +91,11 @@ namespace AtlasCadCore.Forms
                 Location = new Point(20, by + 50),
                 Width = 510,
                 AutoSize = false,
-                Height = 50,
+                Height = 40,
                 ForeColor = Color.DimGray,
                 Text =
                     "Pick Existing: attach the file to a part_number you choose.\n" +
-                    "Create New: enter metadata; atlas mints a fresh part_number.\n" +
-                    "Skip: leave this file out of the upload.",
+                    "Skip: leave this file out of the upload — release it on atlas-ui first.",
             };
             Controls.Add(hint);
 

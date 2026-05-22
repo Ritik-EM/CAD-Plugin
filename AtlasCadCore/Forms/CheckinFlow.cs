@@ -289,81 +289,29 @@ namespace AtlasCadCore.Forms
                             .Where(e => missingSet.Contains(e.PartNumber))
                             .ToList();
 
-                        // Friendly first prompt — list the missing parts and
-                        // offer to create them inline. Yes routes the user
-                        // into AssignPartMetadataForm + /create-batch, the
-                        // same flow Upload to Atlas uses for missing parts.
+                        // Policy: the plugin no longer mints part_master
+                        // entries on the fly. New part_numbers must be
+                        // released via atlas-ui first (single source of
+                        // truth for the metadata + reviewer workflow).
+                        // Surface a clear list and bail; the lock stays
+                        // held so the user can release on atlas-ui and
+                        // retry Check In without re-Checking Out.
                         var msg = new StringBuilder();
                         msg.AppendLine(
-                            $"{missingDetails.Count} part(s) in this assembly aren't registered in atlas yet:");
+                            $"{missingDetails.Count} part(s) in this assembly aren't released on atlas yet:");
                         msg.AppendLine();
-                        foreach (var e in missingDetails.Take(20))
+                        foreach (var e in missingDetails.Take(50))
                             msg.AppendLine($"  • {e.PartNumber}   ({e.NativeFilename})");
-                        if (missingDetails.Count > 20)
-                            msg.AppendLine($"  … {missingDetails.Count - 20} more");
+                        if (missingDetails.Count > 50)
+                            msg.AppendLine($"  … {missingDetails.Count - 50} more");
                         msg.AppendLine();
-                        msg.AppendLine("Create them now? You'll fill in project / vehicle / group /");
-                        msg.AppendLine("release_type for each (same form Upload to Atlas uses) and");
-                        msg.AppendLine("Check In will continue once they're created.");
-                        msg.AppendLine();
-                        msg.AppendLine("No = cancel Check In (your checkout lock stays held).");
-
-                        var resp = MessageBox.Show(msg.ToString(),
-                            "Atlas — Check In: unknown part_numbers",
-                            MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-                        if (resp != DialogResult.Yes) return;
-
-                        // Build MissingPartDto list for the metadata form.
-                        // detected_description left null — user fills if needed.
-                        var missingForForm = missingDetails.Select(e => new MissingPartDto
-                        {
-                            part_number = e.PartNumber,
-                            filename = e.NativeFilename,
-                            step_filename = e.StepFilename,
-                            detected_description = null,
-                        }).ToList();
-
-                        List<CreateBatchEntryDto> toCreate;
-                        using (var metaDlg = new AssignPartMetadataForm(missingForForm))
-                        {
-                            if (metaDlg.ShowDialog() != DialogResult.OK) return;
-                            toCreate = metaDlg.Result;
-                        }
-                        if (toCreate == null || toCreate.Count == 0) return;
-
-                        progress.Show();
-                        progress.SetPhase($"Creating {toCreate.Count} part_master entries…");
-                        try
-                        {
-                            await api.CreateBatchAsync(toCreate);
-                        }
-                        catch (Exception ex)
-                        {
-                            progress.Hide();
-                            MessageBox.Show(
-                                "Failed to create the missing part_master entries:\n\n" + ex.Message,
-                                "Atlas — Check In",
-                                MessageBoxButtons.OK, MessageBoxIcon.Error);
-                            return;
-                        }
-
-                        // Re-validate. If atlas still reports any as missing,
-                        // user must have skipped them in the form — bail with
-                        // a final clear message instead of looping forever.
-                        progress.SetPhase("Re-validating part_numbers…");
-                        var recheck = await api.LookupPartNumbersAsync(
-                            entries.Select(e => e.PartNumber).ToList());
-                        if (recheck?.missing != null && recheck.missing.Count > 0)
-                        {
-                            progress.Hide();
-                            MessageBox.Show(
-                                "Some parts still aren't registered:\n\n  " +
-                                string.Join("\n  ", recheck.missing) +
-                                "\n\nFill metadata for ALL missing parts and confirm to continue.",
-                                "Atlas — Check In",
-                                MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                            return;
-                        }
+                        msg.AppendLine("Release these part_numbers on atlas-ui first, then click");
+                        msg.AppendLine("Check In again. Your checkout lock stays held until you");
+                        msg.AppendLine("Cancel Checkout or successfully Check In.");
+                        MessageBox.Show(msg.ToString(),
+                            "Atlas — Check In blocked: unreleased part_numbers",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
                     }
                     progress.Show();
 
