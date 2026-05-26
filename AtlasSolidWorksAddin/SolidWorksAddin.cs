@@ -76,8 +76,6 @@ namespace AtlasCadPlugin.SolidWorks
             return true;
         }
 
-        // ---- Ribbon ----
-
         private int GetCommandGroupId() => 1;
 
         private void AddRibbonButtons()
@@ -109,8 +107,6 @@ namespace AtlasCadPlugin.SolidWorks
             g.Activate();
         }
 
-        // ---- Auth ----
-
         private bool EnsureAuthenticated()
         {
             var existing = TokenStore.Current();
@@ -122,8 +118,6 @@ namespace AtlasCadPlugin.SolidWorks
                 return dlg.ShowDialog() == DialogResult.OK;
             }
         }
-
-        // ---- Button callbacks (must be public — invoked by SolidWorks via COM) ----
 
         public void OnPingClicked() => _ = Run(async () =>
         {
@@ -196,8 +190,6 @@ namespace AtlasCadPlugin.SolidWorks
                 "Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             EnsureAuthenticated();
         }
-
-        // ---- COM registration ----
 
         [ComRegisterFunction]
         private static void RegisterFunction(Type t)

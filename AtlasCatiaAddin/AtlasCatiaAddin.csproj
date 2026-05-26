@@ -12,6 +12,7 @@
     <FileAlignment>512</FileAlignment>
     <Deterministic>true</Deterministic>
     <RegisterForComInterop>true</RegisterForComInterop>
+    <CATIA_CODE_BIN Condition=" '$(CATIA_CODE_BIN)' == '' ">C:\Program Files\Dassault Systemes\B30\intel_a\code\bin</CATIA_CODE_BIN>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugSymbols>true</DebugSymbols>
@@ -39,24 +40,24 @@
       <Private>True</Private>
     </Reference>
     <!--
-      CATIA V5 PIAs (COM interop assemblies). HintPath assumes a standard
-      install of CATIA V5R30 — adjust for newer releases or non-default
-      install locations. Project won't build until CATIA is installed.
+      CATIA V5 PIAs (COM interop assemblies). Override CATIA_CODE_BIN for
+      newer releases, 64-bit win_b64 installs, or non-default locations.
+      Project won't build until CATIA is installed.
     -->
     <Reference Include="INFITF">
-      <HintPath>C:\Program Files\Dassault Systemes\B30\intel_a\code\bin\INFITF.dll</HintPath>
+      <HintPath>C:\CATIA-RefAssemblies\INFITF.dll</HintPath>
       <EmbedInteropTypes>False</EmbedInteropTypes>
     </Reference>
     <Reference Include="MECMOD">
-      <HintPath>C:\Program Files\Dassault Systemes\B30\intel_a\code\bin\MECMOD.dll</HintPath>
+      <HintPath>C:\CATIA-RefAssemblies\MECMOD.dll</HintPath>
       <EmbedInteropTypes>False</EmbedInteropTypes>
     </Reference>
     <Reference Include="ProductStructureTypeLib">
-      <HintPath>C:\Program Files\Dassault Systemes\B30\intel_a\code\bin\ProductStructureTypeLib.dll</HintPath>
+      <HintPath>C:\CATIA-RefAssemblies\ProductStructureTypeLib.dll</HintPath>
       <EmbedInteropTypes>False</EmbedInteropTypes>
     </Reference>
     <Reference Include="KnowledgewareTypeLib">
-      <HintPath>C:\Program Files\Dassault Systemes\B30\intel_a\code\bin\KnowledgewareTypeLib.dll</HintPath>
+      <HintPath>C:\CATIA-RefAssemblies\KnowledgewareTypeLib.dll</HintPath>
       <EmbedInteropTypes>False</EmbedInteropTypes>
     </Reference>
   </ItemGroup>

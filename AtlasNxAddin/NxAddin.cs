@@ -11,22 +11,13 @@ using NXOpen.MenuBar;
 
 namespace AtlasCadPlugin.Nx
 {
-    /// <summary>
-    /// NX add-in entry point. NX loads .NET DLLs from %UGII_USER_DIR%\startup\
-    /// and calls the well-known Menu_Startup(MenuBarManager) method to wire
-    /// menu items. Each item maps to a public static method exposed via
-    /// MenuButtonEvent.
-    ///
-    /// Configuration of which menu file to load is done via the atlas.men
-    /// file deployed by installer/NxInstaller.cmd.
-    /// </summary>
     public static class NxAddin
     {
         private static AtlasApiClient _api;
         private static AuthService _auth;
         private static ICadAdapter _adapter;
 
-        private const string AtlasBaseUrl = "http://172.16.2.159:8000";
+        private const string AtlasBaseUrl = "https://atlas.myeuler.in/";
         private const string OctopusBaseUrl = "https://octopus.eulerlogistics.com";
 
         public static int Menu_Startup(MenuBarManager menuBarManager)
@@ -62,8 +53,6 @@ namespace AtlasCadPlugin.Nx
         {
             return 0;
         }
-
-        // ---- Menu callbacks ----
 
         public static MenuButtonEvent OnPingClicked(string buttonName, IntPtr handle)
         {
@@ -107,8 +96,6 @@ namespace AtlasCadPlugin.Nx
             EnsureAuthenticated();
             return MenuButtonEvent.Activate;
         }
-
-        // ---- Auth + run wrapper ----
 
         private static bool EnsureAuthenticated()
         {

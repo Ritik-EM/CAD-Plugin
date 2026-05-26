@@ -8,13 +8,6 @@ using AtlasCadCore.Adapter;
 
 namespace AtlasCadCore.Forms
 {
-    /// <summary>
-    /// Modal dialog shown after Check Out when some child references couldn't
-    /// be resolved from atlas (either the part isn't in part_master_library
-    /// or its active revision has no native 3d_raw). User attaches a local
-    /// file per missing child and chooses whether to release a brand-new
-    /// revision (with OTP) or just append the file to the existing revision.
-    /// </summary>
     public class MissingChildUploadForm : Form
     {
         public class Row
@@ -76,8 +69,6 @@ namespace AtlasCadCore.Forms
                 SelectionMode = DataGridViewSelectionMode.FullRowSelect,
                 ReadOnly = false,
                 EditMode = DataGridViewEditMode.EditOnEnter,
-                // Pin row + header heights — default AutoSize sometimes
-                // collapses rows to 0 px under SW's UI host.
                 AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None,
                 ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
                 ColumnHeadersHeight = 28,
@@ -138,9 +129,6 @@ namespace AtlasCadCore.Forms
             };
             bottom.Controls.Add(_otpHint);
 
-            // Anchor=Right only (not Bottom). When the outer TableLayoutPanel
-            // resizes this cell, an Anchor=Bottom button with Y=88 ends up
-            // off-cell — we want Y=88 measured from the top of the cell.
             var ok = new Button { Text = "Upload & Continue", Location = new Point(bottom.Width - 290, 88), Width = 160, Height = 28, Anchor = AnchorStyles.Top | AnchorStyles.Right, DialogResult = DialogResult.None };
             ok.Click += (s, e) =>
             {
@@ -169,7 +157,6 @@ namespace AtlasCadCore.Forms
             AcceptButton = ok;
             CancelButton = cancel;
 
-            // Outer 3-row TableLayoutPanel — deterministic, no z-order tricks.
             var outer = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -204,8 +191,6 @@ namespace AtlasCadCore.Forms
             {
                 _grid.Rows.Add(r.PartNumber, r.OriginalFilename, "", null);
             }
-            // Force the rows to paint immediately — without this they
-            // sometimes don't render until the user clicks the grid.
             _grid.PerformLayout();
             _grid.Refresh();
             if (_grid.Rows.Count > 0)

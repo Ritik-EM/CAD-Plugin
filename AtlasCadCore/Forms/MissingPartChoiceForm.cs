@@ -5,26 +5,8 @@ using AtlasCadCore.ApiClient;
 
 namespace AtlasCadCore.Forms
 {
-    /// <summary>
-    /// Small popup shown for each missing part during Upload when the
-    /// pad-with-"00" pre-pass couldn't find a match in atlas. User picks
-    /// one of two paths:
-    ///   • Pick Existing — open PartMasterPickerDialog and attach the
-    ///     uploaded file to whichever existing atlas part_number they pick
-    ///   • Skip — don't upload this part. The outer Upload flow will list
-    ///     the skipped parts in its summary so the user knows what to
-    ///     release on atlas-ui before re-running Upload.
-    ///
-    /// "Create New" was intentionally removed — atlas-ui is the single
-    /// source of truth for releasing new part_numbers (metadata +
-    /// reviewer workflow). The plugin is attach-only.
-    /// </summary>
     public class MissingPartChoiceForm : Form
     {
-        // ChoiceKind kept (rather than just bool UseExisting) so call sites
-        // can distinguish "user actively skipped" from "user closed without
-        // choosing" if we ever need to. Both currently route to the same
-        // "needs to be released on atlas-ui" bucket in the upload flow.
         public enum ChoiceKind { Skip, UseExisting }
 
         public ChoiceKind Choice { get; private set; } = ChoiceKind.Skip;

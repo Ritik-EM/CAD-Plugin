@@ -17,36 +17,18 @@ namespace AtlasCadCore.ApiClient
         public UnauthorizedException(string message) : base(message) { }
     }
 
-    /// <summary>
-    /// Single HTTP client shared by all three CAD plugins. Attaches the
-    /// JWT from TokenStore as Authorization: Bearer on every call.
-    /// </summary>
     public class AtlasApiClient
     {
         private static readonly HttpClient _http = CreateHttpClient();
-        // Separate client for direct-to-S3 PUTs (the presigned-upload flow).
-        // S3 doesn't need Bearer/X-Atlas-Plugin and adding them might mismatch
-        // the presigned signature; isolate so the atlas-api defaults don't
-        // leak into the S3 request. Longer timeout for big multi-MB uploads.
         private static readonly HttpClient _s3Http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
 
         private static HttpClient CreateHttpClient()
         {
             var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
             string ver = PluginVersion.Current?.ToString(3) ?? "dev";
-            // CloudFront / AWS WAF in front of prod atlas-api blocks requests
-            // with no User-Agent (the .NET HttpClient default) as bot traffic.
-            // A descriptive UA both passes the basic bot rules AND lets
-            // backend access logs attribute calls to a specific plugin build.
             http.DefaultRequestHeaders.UserAgent.ParseAdd(
                 $"AtlasCadPlugin/{ver} (.NET 4.8; SolidWorks)");
-            // X-Atlas-Plugin is the *canonical* signal for "this came from the
-            // CAD plugin, not a browser". Cleaner WAF allow-list than UA
-            // substring matching — AWS team can add a single rule
-            //   `header X-Atlas-Plugin starts-with "AtlasCadPlugin/" → ALLOW`
-            // that covers every endpoint. File bytes themselves now bypass
-            // CloudFront entirely via direct-to-S3 PUTs (see PresignUploadAsync
-            // + PutFileToS3Async) so WAF only ever sees small JSON requests.
+            
             http.DefaultRequestHeaders.Add("X-Atlas-Plugin", $"AtlasCadPlugin/{ver}");
             http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
             return http;
@@ -78,11 +60,6 @@ namespace AtlasCadCore.ApiClient
             }
             catch (HttpRequestException ex)
             {
-                // HttpClient surfaces all socket/TLS/DNS/proxy failures as a
-                // single HttpRequestException with a generic message. The
-                // actual cause is in InnerException — expose it so the user
-                // (and us, on the receiving end of a screenshot) can tell
-                // connection-refused apart from TLS apart from DNS.
                 var details = new System.Text.StringBuilder();
                 details.AppendLine($"{operation} — transport error for {req.Method} {url}");
                 details.AppendLine($"  HttpClient: {ex.Message}");
@@ -105,8 +82,6 @@ namespace AtlasCadCore.ApiClient
             return body;
         }
 
-        // ---- Endpoints (P7 surface; assembly-flow endpoints removed in P7.0) ----
-
         public async Task<PluginVersionDto> LatestVersionAsync()
         {
             var req = NewRequest(HttpMethod.Get, "/api/v1/cad/version/latest");
@@ -119,8 +94,6 @@ namespace AtlasCadCore.ApiClient
             var req = NewRequest(HttpMethod.Get, "/api/v1/cad/ping");
             return await SendAsync(req, "Ping");
         }
-
-        // ---- Browse Part Master Library ----
 
         public async Task<PaginatedDto<PartMasterDocumentDto>> ListPartMasterAsync(
             string releaseType, string search, int page, int limit)
@@ -160,14 +133,6 @@ namespace AtlasCadCore.ApiClient
             await SendAsync(req, "Cancel-checkout");
         }
 
-        /// <summary>
-        /// First-time upload using the presigned-PUT flow.
-        ///   1. Ask atlas-api for a session_id + one presigned URL per distinct filename.
-        ///   2. PUT each file's bytes directly to S3 (bypasses CloudFront).
-        ///   3. POST /cad/part-master/upload with session_id + tree (tiny JSON body).
-        /// File bytes never traverse atlas-api or CloudFront, so WAF only sees
-        /// small JSON requests it has no reason to block.
-        /// </summary>
         public async Task<UploadResultDto> UploadPartMasterAsync(
             IEnumerable<object> tree, IEnumerable<string> filePaths,
             bool releaseNewRevision = false, string otp = null)
@@ -229,14 +194,8 @@ namespace AtlasCadCore.ApiClient
             return JsonConvert.DeserializeObject<ApiEnvelope<CheckinResultDto>>(body).data;
         }
 
-        /// <summary>
-        /// Presign + PUT-to-S3 for every distinct file in filePaths.
-        /// Returns the session_id the caller must pass to the finalize endpoint.
-        /// </summary>
         public async Task<string> StageFilesAsync(IEnumerable<string> filePaths, string operation)
         {
-            // De-dup by filename — the backend keys staging by filename within
-            // a session, so uploading the same one twice would just overwrite.
             var byName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var path in filePaths ?? Enumerable.Empty<string>())
             {
@@ -248,8 +207,6 @@ namespace AtlasCadCore.ApiClient
             if (presign?.uploads == null)
                 throw new InvalidOperationException($"{operation}: presign returned no upload slots");
 
-            // Upload all files in parallel — each PUT goes direct to S3 so
-            // there's no atlas-api bottleneck to serialise against.
             var puts = presign.uploads
                 .Where(u => !string.IsNullOrEmpty(u.presigned_url) && byName.ContainsKey(u.filename))
                 .Select(u => PutFileToS3Async(u.presigned_url, byName[u.filename]))
@@ -268,12 +225,6 @@ namespace AtlasCadCore.ApiClient
             return JsonConvert.DeserializeObject<ApiEnvelope<PresignUploadResultDto>>(body).data;
         }
 
-        /// <summary>
-        /// PUT a single file's bytes directly to a presigned S3 URL. Uses
-        /// the dedicated _s3Http client so no atlas-api headers (Bearer,
-        /// X-Atlas-Plugin) leak into the request — AWS signs only specific
-        /// headers and unrelated ones can mismatch the signature.
-        /// </summary>
         public async Task PutFileToS3Async(string presignedUrl, string filePath)
         {
             using (var stream = OpenSharedRead(filePath))
@@ -290,11 +241,6 @@ namespace AtlasCadCore.ApiClient
             }
         }
 
-        /// <summary>
-        /// Trigger backend to generate an OTP for the release-revision action
-        /// and email it to the user. Used by the Check In flow — user enters
-        /// the emailed code to authorise the revision batch.
-        /// </summary>
         public async Task RequestReleaseRevisionOtpAsync()
         {
             var req = NewRequest(HttpMethod.Post, "/api/v1/auth/otp");
@@ -319,11 +265,6 @@ namespace AtlasCadCore.ApiClient
             return JsonConvert.DeserializeObject<ApiEnvelope<CreateBatchResultDto>>(body).data;
         }
 
-        // BuildTreeMultipart removed — the upload + checkin flows no longer
-        // send multipart bodies through atlas-api. Bytes go direct to S3 via
-        // presigned PUTs and the finalize endpoints take JSON. See
-        // StageFilesAsync / PutFileToS3Async / PresignUploadAsync.
-
         public async Task<string> GetS3DownloadUrlAsync(string s3Key)
         {
             var req = NewRequest(HttpMethod.Get,
@@ -344,7 +285,6 @@ namespace AtlasCadCore.ApiClient
 
         public async Task DownloadFileAsync(string presignedUrl, string targetPath)
         {
-            // Presigned S3 URLs must NOT carry Authorization. Use a clean request.
             Exception last = null;
             for (int i = 0; i < 3; i++)
             {

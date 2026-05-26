@@ -11,12 +11,6 @@ using AtlasCadCore.Utility;
 
 namespace AtlasCadCore.Forms
 {
-    /// <summary>
-    /// Replaces BrowseAtlasForm. Browses part_master_library directly: filter
-    /// by release_type, free-text search, paginate. The selected row's full
-    /// revision history is shown in the detail panel; user picks an action
-    /// (Open in CAD / Insert into active assembly / Check Out).
-    /// </summary>
     public class BrowsePartMasterForm : Form
     {
         private readonly AtlasApiClient _api;
@@ -34,9 +28,6 @@ namespace AtlasCadCore.Forms
         private Button _contributeBtn;
         private ToolTip _checkoutTip;
         private ComboBox _revisionCombo;
-        // Set once a STP-only part has been opened in this session, so we
-        // only nag the user with the "imported geometry, no design intent"
-        // info once per dialog instance.
         private bool _stpInfoShown;
         private Label _statusLabel;
         private Button _prevPageBtn;
@@ -65,8 +56,6 @@ namespace AtlasCadCore.Forms
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(900, 500);
 
-            // Top bar — NOT docked; it'll be placed in row 0 of the
-            // outer TableLayoutPanel set up at the end of BuildUi().
             var topPanel = new Panel { Dock = DockStyle.Fill, Height = 44, Padding = new Padding(8) };
             topPanel.Controls.Add(new Label { Text = "Release type:", AutoSize = true, Location = new Point(8, 14) });
             _releaseTypeCombo = new ComboBox
@@ -100,12 +89,7 @@ namespace AtlasCadCore.Forms
             _refreshBtn = new Button { Text = "Refresh", Location = new Point(682, 8), Width = 80 };
             _refreshBtn.Click += (s, e) => _ = ReloadAsync();
             topPanel.Controls.Add(_refreshBtn);
-            // (topPanel will be added to the outer TableLayoutPanel later.)
 
-            // Split: grid on the left, details + actions on the right.
-            // SplitterDistance / Panel2MinSize must be set AFTER the container
-            // has a real Width — setting them on construction throws because
-            // the default Width is 150 and 340 > 150 - Panel1MinSize.
             var split = new SplitContainer
             {
                 Dock = DockStyle.Fill,
@@ -123,7 +107,6 @@ namespace AtlasCadCore.Forms
                 catch { /* layout race — best effort */ }
             };
 
-            // ---- Grid ----
             _grid = new DataGridView
             {
                 Dock = DockStyle.Fill,
@@ -135,18 +118,11 @@ namespace AtlasCadCore.Forms
                 MultiSelect = false,
                 AutoGenerateColumns = false,
                 RowHeadersVisible = false,
-                // Pin row + header heights explicitly. On some SW Inspection
-                // add-in configurations the default AutoSize mode collapsed
-                // rows to 0 px, leaving the grid looking empty even though
-                // data was loaded. Explicit heights side-step that.
                 AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.None,
                 ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.DisableResizing,
                 ColumnHeadersHeight = 28,
             };
             _grid.RowTemplate.Height = 26;
-            // SW's hosting process sometimes mis-renders the visual-styles
-            // version of column headers (renders them blank). Disabling
-            // visual styles forces the classic look — guaranteed visible.
             _grid.EnableHeadersVisualStyles = false;
             _grid.ColumnHeadersDefaultCellStyle.BackColor = SystemColors.ControlLight;
             _grid.ColumnHeadersDefaultCellStyle.ForeColor = SystemColors.ControlText;
@@ -158,7 +134,6 @@ namespace AtlasCadCore.Forms
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Formats", Name = "formats", Width = 110 });
             _grid.SelectionChanged += (s, e) => OnSelectionChanged();
 
-            // Pager — docked bottom so it stays put when the panel resizes.
             var pagerPanel = new Panel { Dock = DockStyle.Bottom, Height = 36 };
             _prevPageBtn = new Button { Text = "‹ Prev", Location = new Point(8, 4), Width = 70 };
             _prevPageBtn.Click += async (s, e) => { if (_page > 1) { _page--; await ReloadAsync(); } };
@@ -171,16 +146,11 @@ namespace AtlasCadCore.Forms
             _nextPageBtn.Click += async (s, e) => { if (_page < _totalPages) { _page++; await ReloadAsync(); } };
             pagerPanel.Controls.Add(_nextPageBtn);
 
-            // SendToBack on the Fill so the layout engine docks it LAST,
-            // letting the pager actually claim the bottom strip instead of
-            // overlapping with it.
             _grid.Dock = DockStyle.Fill;
             split.Panel1.Controls.Add(pagerPanel);
             split.Panel1.Controls.Add(_grid);
             _grid.SendToBack();
 
-            // ---- Detail panel — heading on top, scrollable text in the
-            // middle, action buttons pinned to the bottom. ----
             var detailRoot = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8) };
 
             var detailLabel = new Label
@@ -192,10 +162,6 @@ namespace AtlasCadCore.Forms
             };
 
             var actionPanel = new Panel { Dock = DockStyle.Bottom, Height = 156 };
-            // Revision picker — defaults to the active revision but the user
-            // can choose any historical revision to act against (Check Out
-            // an older revision to branch from it, Open an older revision
-            // to compare, etc.). Populated in OnSelectionChanged.
             var revLabel = new Label { Text = "Revision:", Location = new Point(0, 8), AutoSize = true };
             actionPanel.Controls.Add(revLabel);
             _revisionCombo = new ComboBox
@@ -233,17 +199,12 @@ namespace AtlasCadCore.Forms
                 Dock = DockStyle.Fill,
             };
 
-            // Add docked edges first, then the Fill last so it occupies what's
-            // left rather than overlaying the edge children.
             detailRoot.Controls.Add(detailLabel);
             detailRoot.Controls.Add(actionPanel);
             detailRoot.Controls.Add(_detailBox);
 
             split.Panel2.Controls.Add(detailRoot);
 
-            // Status bar — 2 columns: dynamic status text fills the left,
-            // version chip pinned to the right so users can always see which
-            // plugin build they're running without opening a separate dialog.
             _statusLabel = new Label { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(8, 0, 0, 0), Text = "Ready." };
             var versionChip = new Label
             {
@@ -266,10 +227,6 @@ namespace AtlasCadCore.Forms
             statusRow.Controls.Add(_statusLabel, 0, 0);
             statusRow.Controls.Add(versionChip,  1, 0);
 
-            // Outer layout uses a TableLayoutPanel — three rows, deterministic.
-            // Avoids the WinForms Dock-overlap pitfalls we hit earlier where
-            // the SplitContainer would creep behind the toolbar / status
-            // label and hide the grid's column headers + pager.
             var outer = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -286,8 +243,6 @@ namespace AtlasCadCore.Forms
             Controls.Add(outer);
         }
 
-        // ---- Data loading ----
-
         private async Task ReloadAsync()
         {
             try
@@ -302,9 +257,6 @@ namespace AtlasCadCore.Forms
                 _totalPages = Math.Max(1, page.pages);
                 _page = Math.Min(Math.Max(1, page.page), _totalPages);
 
-                // Preserve search-box focus across the reload — the user
-                // is likely still typing. Setting CurrentCell below would
-                // otherwise move keyboard focus into the grid.
                 bool restoreSearchFocus = _searchBox.Focused;
                 int caret = _searchBox.SelectionStart;
                 int selLen = _searchBox.SelectionLength;
@@ -320,8 +272,7 @@ namespace AtlasCadCore.Forms
                         latest?.part_number?.Substring(Math.Max(0, latest.part_number.Length - 2)) ?? "—",
                         FormatBadges(latest));
                 }
-                // Force a layout + repaint pass — without this the rows
-                // sometimes don't appear until the user clicks the grid.
+
                 _grid.PerformLayout();
                 _grid.Refresh();
                 if (_grid.Rows.Count > 0)
@@ -375,10 +326,6 @@ namespace AtlasCadCore.Forms
             string releaseType = _releaseTypeCombo.SelectedItem as string;
             if (releaseType == "All") releaseType = null;
 
-            // Populate the revision picker with every revision in the
-            // currently-relevant bucket(s). Default selection = the active
-            // revision; the user can switch to any historical one before
-            // clicking Open / Insert / Check Out / Contribute.
             PopulateRevisionCombo(_selected, releaseType);
 
             var latest = LatestActiveRevision(_selected, releaseType);
@@ -395,21 +342,13 @@ namespace AtlasCadCore.Forms
 
             _openBtn.Enabled = hasFile;
             _insertBtn.Enabled = hasFile && hasActiveAssembly;
-            // Check Out is gated on a real native existing — STP-only parts
-            // can't be meaningfully edited (no feature tree). User must use
-            // Contribute Native File first to upload a real .sldprt / .sldasm.
             _checkoutBtn.Enabled = hasNative;
             _checkoutTip.SetToolTip(_checkoutBtn, hasNative
                 ? "Lock the part and download the native file for editing."
                 : "Disabled — no native CAD file in this revision. Use “Contribute Native File” to upload a real .sldprt/.sldasm first.");
             _cancelCheckoutBtn.Enabled = hasFile;
-            // Contribute is enabled whenever a row is selected — the user
-            // picks a local file to upload, regardless of what's currently
-            // in the revision.
             _contributeBtn.Enabled = _selected != null;
         }
-
-        // ---- Actions ----
 
         private async Task OnOpenAsync()
         {
@@ -426,11 +365,6 @@ namespace AtlasCadCore.Forms
 
                 if (!picked.IsNative)
                 {
-                    // No native file in atlas — convert the STP locally so
-                    // the user can at least *view* the geometry in SW. The
-                    // result is dumb geometry (no feature tree, no design
-                    // intent) and is kept STRICTLY LOCAL — we never upload
-                    // STP-derived files back to atlas as fake natives.
                     string outHint = Path.Combine(
                         Path.GetDirectoryName(picked.Path),
                         Path.GetFileNameWithoutExtension(picked.Path)
@@ -490,16 +424,6 @@ namespace AtlasCadCore.Forms
             string pn = SelectedPartNumber();
             if (pn == null) return;
 
-            // Strict mode: Check Out requires a real native file. We refuse
-            // STP-only checkouts because anything the user "edits" would be
-            // dumb geometry — and Check In would then write that dumb file
-            // back into atlas as if it were a real revision, destroying the
-            // design intent for everyone. The Contribute Native File flow
-            // is the deliberate path for getting a real .sldprt into atlas.
-            //
-            // Check the user-picked revision (not just the active one) so
-            // they can lock + edit an older revision when they explicitly
-            // chose it in the Revision dropdown.
             var rev = RevisionByPartNumber(pn);
             if (rev == null)
             {
@@ -532,9 +456,6 @@ namespace AtlasCadCore.Forms
                 var picked = await PickAndDownloadAsync(pn, prefersNative: true);
                 if (picked == null || !picked.IsNative)
                 {
-                    // Defensive — we already checked native existence above,
-                    // but a race (revision updated between selection and click)
-                    // could land us here.
                     await _api.CancelCheckoutPartMasterAsync(pn);
                     lockAcquired = false;
                     Beep("Native file disappeared between selection and download. Lock released.");
@@ -544,17 +465,10 @@ namespace AtlasCadCore.Forms
                 CheckoutTracker.Track(picked.Path, pn);
                 _adapter.OpenDocument(picked.Path);
 
-                // Resolve every child reference from atlas — never use the
-                // local file system. Anything atlas can't supply with a
-                // native is presented in MissingChildUploadForm for the
-                // user to attach a local file.
                 SetBusy(true, "Resolving child parts from atlas…");
                 var openedDoc = _adapter.GetActiveDocument();
                 await ResolveFromAtlasFlow.RunAsync(_api, _adapter, openedDoc, silentIfNothingMissing: true);
 
-                // Stash SHA-256 of every file in the now-resolved assembly
-                // so Check In can auto-tick the rows whose bytes changed.
-                // Re-fetch the active doc after Resolve in case it reloaded.
                 try
                 {
                     SetBusy(true, "Recording baseline file hashes…");
@@ -567,8 +481,6 @@ namespace AtlasCadCore.Forms
                         {
                             if (string.IsNullOrEmpty(f.PartNumber)) continue;
                             if (string.IsNullOrEmpty(f.FullPath) || !File.Exists(f.FullPath)) continue;
-                            // First write wins — duplicate component refs
-                            // for the same part_number must share bytes.
                             if (baseline.ContainsKey(f.PartNumber)) continue;
                             baseline[f.PartNumber] = FileHashing.Sha256Hex(f.FullPath);
                         }
@@ -593,8 +505,6 @@ namespace AtlasCadCore.Forms
                     "Atlas — Check Out",
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
 
-                // Browse dialog has done its job — close it so the user can
-                // focus on the SW window.
                 this.BeginInvoke(new Action(() => this.Close()));
             }
             catch (Exception ex)
@@ -627,7 +537,6 @@ namespace AtlasCadCore.Forms
                     _api, pn, dlg.FileName,
                     sourceLabel: "selected from local disk");
             }
-            // Refresh so the new file's badge shows immediately.
             await ReloadAsync();
         }
 
@@ -649,13 +558,8 @@ namespace AtlasCadCore.Forms
             finally { SetBusy(false, null); }
         }
 
-        // ---- Helpers ----
-
         private string SelectedPartNumber()
         {
-            // Honour the revision picker if the user has chosen one;
-            // otherwise fall back to the latest active revision in the
-            // current release_type bucket.
             string picked = _revisionCombo?.SelectedItem as string;
             if (!string.IsNullOrEmpty(picked)) return picked;
             string releaseType = _releaseTypeCombo.SelectedItem as string;
@@ -663,12 +567,6 @@ namespace AtlasCadCore.Forms
             return LatestActiveRevision(_selected, releaseType)?.part_number;
         }
 
-        /// <summary>
-        /// Find the specific revision object for a given part_number under
-        /// the currently-selected doc. Used to grab reference_documents for
-        /// the user-picked revision (not just the active one) when running
-        /// Open / Insert / Check Out.
-        /// </summary>
         private PartMasterRevisionDto RevisionByPartNumber(string partNumber)
         {
             if (string.IsNullOrEmpty(partNumber) || _selected?.releases == null) return null;
@@ -690,11 +588,6 @@ namespace AtlasCadCore.Forms
             _revisionCombo.Enabled = false;
             if (doc?.releases == null) return;
 
-            // Build the list in revision order: walk every bucket, prefer
-            // the preferredReleaseType first (so its revisions appear
-            // before others), and within a bucket keep the natural order
-            // (oldest first, which means newest last — but selection
-            // defaults to the active one, see below).
             var ordered = new List<PartMasterRevisionDto>();
             void AddBucket(string rt)
             {
@@ -715,7 +608,6 @@ namespace AtlasCadCore.Forms
                     AddBucket(rt);
             }
 
-            // Display label: "AN5T01050B  (active)" or "AN5T01050A".
             string activePn = null;
             foreach (var rev in ordered)
             {
@@ -733,24 +625,14 @@ namespace AtlasCadCore.Forms
             }
         }
 
-        /// <summary>Download the file that best matches the current CAD's native
-        /// format. Falls back to STP if no native file is in the revision's drawing_X fields.
-        /// Returns the local path or null if there is nothing to download.</summary>
         private async Task<string> DownloadPreferredAsync(string partNumber, bool prefersNative)
         {
             var picked = await PickAndDownloadAsync(partNumber, prefersNative);
             return picked?.Path;
         }
 
-        /// <summary>
-        /// Same as DownloadPreferredAsync but also returns whether the picked
-        /// file is a native CAD file or a STP fallback — callers that need
-        /// to differentiate (e.g. for Contribute-Native) use this variant.
-        /// </summary>
         private async Task<PickedDownload> PickAndDownloadAsync(string partNumber, bool prefersNative)
         {
-            // Use the user-picked revision when available, falling back to
-            // the latest active in the current release_type bucket.
             var rev = RevisionByPartNumber(partNumber);
             if (rev == null)
             {
@@ -794,11 +676,8 @@ namespace AtlasCadCore.Forms
             {
                 var active = bucket?.FirstOrDefault(r => r.active == true);
                 if (active != null) return active;
-                // Some legacy docs have only one revision with no explicit
-                // active flag — fall back to the last entry in that bucket.
                 if (bucket != null && bucket.Count > 0) return bucket[bucket.Count - 1];
             }
-            // No release_type filter (or empty preferred bucket) — walk all buckets in priority order
             foreach (var rt in new[] { "PRODUCTION", "PROTO", "ALTERNATE_PART" })
             {
                 if (doc.releases.TryGetValue(rt, out var b))
@@ -816,7 +695,6 @@ namespace AtlasCadCore.Forms
             var refs = rev?.EffectiveRefs;
             if (refs == null) return "";
             var tags = new List<string>();
-            // Tag the native CAD format by the extension on the 3d_raw key.
             if (!string.IsNullOrEmpty(refs.Native3dRaw))
             {
                 string ext = Path.GetExtension(refs.Native3dRaw).ToLowerInvariant();
@@ -867,11 +745,6 @@ namespace AtlasCadCore.Forms
             UseWaitCursor = busy;
             if (text != null) _statusLabel.Text = text;
             _refreshBtn.Enabled = !busy;
-            // Deliberately leave _searchBox and _releaseTypeCombo enabled —
-            // disabling the search box during a background reload steals
-            // keyboard focus and forces the user to click back into it
-            // before they can type the next letter. The 350 ms debounce
-            // timer is enough to prevent a request-per-keystroke flood.
         }
 
         private void Beep(string text)

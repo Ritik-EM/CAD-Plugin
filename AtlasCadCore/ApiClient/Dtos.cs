@@ -5,19 +5,11 @@ using Newtonsoft.Json.Linq;
 
 namespace AtlasCadCore.ApiClient
 {
-    /// <summary>
-    /// Per-revision references to S3-stored files, keyed by file kind.
-    /// The backend writes this shape; legacy revisions may have a JSON list
-    /// instead — the JsonConverter below handles both.
-    /// </summary>
     [JsonConverter(typeof(ReferenceDocumentsConverter))]
     public class ReferenceDocumentsDto
     {
-        // PDF drawing.
         public string Drawing2d;
-        // STEP file (.stp / .step) — visual / interchange.
         public string Step3d;
-        // Native CAD file (.sldprt, .CATPart, .prt, ...) — editable.
         public string Native3dRaw;
     }
 
@@ -40,9 +32,6 @@ namespace AtlasCadCore.ApiClient
             }
             if (token.Type == JTokenType.Array)
             {
-                // Legacy list-shaped reference_documents — infer the kind
-                // from each entry's extension and slot it into the typed
-                // dto. Last-writer-wins per kind.
                 foreach (var item in (JArray)token)
                 {
                     if (item.Type != JTokenType.String) continue;
@@ -108,18 +97,12 @@ namespace AtlasCadCore.ApiClient
         public string download_url;
     }
 
-    // ---- Part master ----
-
     public class PartMasterRevisionDto
     {
         public string part_number;
         public string created_by;
         public string created_at;
-        // Nullable — older revisions never had this flag and return null.
         public bool? active;
-        // Canonical storage: dict { "2d", "3d", "3d_raw" } → S3 key strings.
-        // The JsonConverter on the type also tolerates legacy list-shaped
-        // values (extension-inferred) so very old docs still deserialize.
         public ReferenceDocumentsDto reference_documents;
 
         [JsonIgnore]
@@ -127,11 +110,6 @@ namespace AtlasCadCore.ApiClient
             ?? new ReferenceDocumentsDto();
     }
 
-    /// <summary>
-    /// One row in the paginated /part-master/part-number response. `_id` is
-    /// the Mongo ObjectId as a string; `releases` is a map of release_type
-    /// (PROTO/PRODUCTION/ALTERNATE_PART) to the list of revisions in that bucket.
-    /// </summary>
     public class PartMasterDocumentDto
     {
         public string _id;
@@ -163,8 +141,6 @@ namespace AtlasCadCore.ApiClient
         public string key;
     }
 
-    // ---- Presigned-upload flow ----
-
     public class PresignUploadResultDto
     {
         public string session_id;
@@ -177,8 +153,6 @@ namespace AtlasCadCore.ApiClient
         public string presigned_url;
         public string s3_key;
     }
-
-    // ---- Upload / create-batch ----
 
     public class UploadResultDto
     {
@@ -224,8 +198,6 @@ namespace AtlasCadCore.ApiClient
         public string release_type;
     }
 
-    // ---- Checkin ----
-
     public class CheckinPreviewResultDto
     {
         public string root_part_number;
@@ -236,7 +208,7 @@ namespace AtlasCadCore.ApiClient
     public class CheckinToBumpDto
     {
         public string part_number;
-        public string reason;   // "changed" | "ancestor_of_changed"
+        public string reason; 
         public int depth;
     }
 

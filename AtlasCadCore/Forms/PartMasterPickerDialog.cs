@@ -8,12 +8,6 @@ using AtlasCadCore.ApiClient;
 
 namespace AtlasCadCore.Forms
 {
-    /// <summary>
-    /// Small modal: search part_master_library + pick an existing part_number.
-    /// Used by the Upload flow when a detected filename code isn't found in
-    /// atlas and the user wants to attach the file to an existing entry
-    /// (rather than mint a brand-new part_number for it).
-    /// </summary>
     public class PartMasterPickerDialog : Form
     {
         private readonly AtlasApiClient _api;
@@ -80,10 +74,6 @@ namespace AtlasCadCore.Forms
             _grid.SelectionChanged += (s, e) => UpdateOkButton();
             _grid.CellDoubleClick += (s, e) => { if (_okBtn.Enabled) { _okBtn.PerformClick(); } };
 
-            // 3-column TableLayoutPanel — deterministic right-alignment.
-            // The earlier "Anchor=Bottom + Location relative to bottom.Width"
-            // pattern broke as soon as the outer TableLayoutPanel resized
-            // this cell, pushing the buttons off-screen.
             var bottom = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -96,7 +86,6 @@ namespace AtlasCadCore.Forms
             bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             bottom.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
 
-            // Spacer cell (status text could go here later).
             bottom.Controls.Add(new Label { AutoSize = true, Anchor = AnchorStyles.Left, Text = "" }, 0, 0);
 
             _okBtn = new Button
@@ -131,7 +120,6 @@ namespace AtlasCadCore.Forms
             AcceptButton = _okBtn;
             CancelButton = cancel;
 
-            // Deterministic 3-row layout — same pattern as the Browse form.
             var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
             outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 44f));

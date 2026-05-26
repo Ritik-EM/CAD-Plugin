@@ -17,8 +17,6 @@ namespace AtlasCadCore.Utility
                 var info = await api.LatestVersionAsync();
                 if (info == null || string.IsNullOrEmpty(info.version)) return;
 
-                // Use PluginVersion so this matches the version shown in the
-                // login form + browse status bar — single source of truth.
                 var current = PluginVersion.Current;
                 var latest = TryParse(info.version);
                 if (latest == null || current == null) return;

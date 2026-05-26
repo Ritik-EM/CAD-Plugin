@@ -57,9 +57,6 @@ namespace AtlasCadCore.Forms
             _loginButton.Click += async (s, e) => await TryLogin();
             Controls.Add(_loginButton);
 
-            // Version footer — bottom-left, small grey text so it's discoverable
-            // without competing with the sign-in CTA. Anchored Bottom so it
-            // stays in the corner even if the form is resized in a future tweak.
             var versionLabel = new Label
             {
                 Text = $"Atlas CAD Plugin {PluginVersion.Display}",

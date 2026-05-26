@@ -14,10 +14,6 @@ namespace AtlasCadCore.Auth
         public AuthException(string message) : base(message) { }
     }
 
-    /// <summary>
-    /// Exchanges username+password for a JWT against Euler's octopus auth service.
-    /// CAD-agnostic — same instance used by SolidWorks / CATIA / NX plugins.
-    /// </summary>
     public class AuthService
     {
         private static readonly HttpClient _http = CreateHttpClient();
@@ -26,9 +22,6 @@ namespace AtlasCadCore.Auth
         {
             var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
             string ver = PluginVersion.Current?.ToString(3) ?? "dev";
-            // Matches AtlasApiClient.CreateHttpClient — same UA + canonical
-            // X-Atlas-Plugin header + Accept so the auth call is treated as
-            // first-party plugin traffic by CloudFront / AWS WAF.
             http.DefaultRequestHeaders.UserAgent.ParseAdd(
                 $"AtlasCadPlugin/{ver} (.NET 4.8; SolidWorks)");
             http.DefaultRequestHeaders.Add("X-Atlas-Plugin", $"AtlasCadPlugin/{ver}");

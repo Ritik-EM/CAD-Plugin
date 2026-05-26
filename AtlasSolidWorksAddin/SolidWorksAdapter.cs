@@ -9,10 +9,6 @@ using SolidWorks.Interop.swconst;
 
 namespace AtlasCadPlugin.SolidWorks
 {
-    /// <summary>
-    /// SolidWorks-specific implementation of ICadAdapter. Wraps the SW
-    /// COM interop API behind the CAD-agnostic adapter contract Core uses.
-    /// </summary>
     public class SolidWorksAdapter : ICadAdapter
     {
         private readonly ISldWorks _swApp;
@@ -20,7 +16,6 @@ namespace AtlasCadPlugin.SolidWorks
         public SolidWorksAdapter(ISldWorks swApp)
         {
             _swApp = swApp;
-            // SolidWorks STEP export options — AP214 for assembly + colour support.
             _swApp.SetUserPreferenceIntegerValue(
                 (int)swUserPreferenceIntegerValue_e.swStepAP, 214);
         }
@@ -62,20 +57,12 @@ namespace AtlasCadPlugin.SolidWorks
                 "", ref errors, ref warnings);
         }
 
-        // Bumped on every WalkAssembly behaviour change. The check-in diagnostic
-        // reads this back, so when a user reports "wrong row count" we can tell
-        // at a glance whether they're on an old AtlasSolidWorksAddin.dll.
         public const string WalkAssemblyVersion = "2026-05-21-skipreason-v1";
 
         public List<AssemblyFileRef> WalkAssembly(CadDocument doc)
         {
-            // Stamp the diagnostics log so the user can confirm the new
-            // adapter binary is loaded. AppendAllText is best-effort —
-            // failures are silently ignored so logging never breaks the walk.
             try
             {
-                // Fully-qualify System.Environment — SolidWorks.Interop.sldworks
-                // exposes its own Environment interface that otherwise shadows it.
                 string logDir = Path.Combine(
                     System.Environment.GetFolderPath(System.Environment.SpecialFolder.ApplicationData),
                     "AtlasCad");
@@ -114,11 +101,6 @@ namespace AtlasCadPlugin.SolidWorks
             });
             seenPaths.Add(rootPath);
 
-            // Recurse top-down so ParentPartNumber is the immediate parent,
-            // not always the root. GetComponents(true) returns only the
-            // direct children; we drill into each sub-assembly via its
-            // own GetComponents(true) call. This is required for the
-            // check-in flow's ancestor-bump propagation to work correctly.
             var asm = (AssemblyDoc)swDoc;
             WalkChildren(asm, rootPn, seenPaths, result);
             return result;
@@ -129,11 +111,6 @@ namespace AtlasCadPlugin.SolidWorks
         {
             object[] components = (object[])parentAsm.GetComponents(true);
             if (components == null) return;
-
-            // Keep every component as an entry. Set SkipReason for the ones
-            // that can't be uploaded, so the check-in flow can surface
-            // "N components excluded — here's why" instead of silently
-            // omitting them and confusing the user.
             foreach (object comp in components)
             {
                 Component2 c = comp as Component2;
@@ -149,8 +126,6 @@ namespace AtlasCadPlugin.SolidWorks
                 else if (string.IsNullOrEmpty(fullPath)) skipReason = "no-path";
                 else if (!File.Exists(fullPath)) skipReason = "missing-file";
 
-                // De-dupe by path only when we have one. Suppressed components
-                // and ones with no path are reported per-instance.
                 if (skipReason == null && !seenPaths.Add(fullPath)) continue;
 
                 IModelDoc2 compDoc = null;
@@ -159,9 +134,6 @@ namespace AtlasCadPlugin.SolidWorks
                 if (skipReason == null && string.IsNullOrEmpty(childPn))
                     skipReason = "no-part-number";
 
-                // Use the displayed component name as a fallback Filename so
-                // dropped components show up as something recognisable in
-                // the "components excluded" panel.
                 string displayName = childFilename;
                 if (string.IsNullOrEmpty(displayName))
                 {
@@ -172,9 +144,6 @@ namespace AtlasCadPlugin.SolidWorks
                 result.Add(new AssemblyFileRef
                 {
                     FullPath = fullPath,
-                    // Bare filename — STEP-imported assemblies store children in
-                    // %LOCALAPPDATA%\Temp\swx****\ which produces ".." path-traversal
-                    // segments that break S3 presigned URL signatures.
                     RelativePath = displayName,
                     Filename = displayName,
                     IsRoot = false,
@@ -215,10 +184,6 @@ namespace AtlasCadPlugin.SolidWorks
                 string stepName = Path.GetFileNameWithoutExtension(f.Filename) + ".stp";
                 string stepPath = Path.Combine(stagingDir, stepName);
 
-                // Prefer the IModelDoc2 captured during WalkAssembly — that
-                // doc is already loaded as part of the open assembly tree,
-                // so we skip the OpenDoc6 cost (which is what was making
-                // STEP-imported assemblies take minutes to export).
                 IModelDoc2 srcDoc = f.NativeHandle as IModelDoc2;
                 bool opened = false;
                 if (srcDoc == null)
@@ -244,8 +209,6 @@ namespace AtlasCadPlugin.SolidWorks
                         | (int)swSaveAsOptions_e.swSaveAsOptions_Copy,
                     null, ref saveErrors, ref saveWarnings);
 
-                // Close docs we explicitly opened ourselves — leave any
-                // already-open ones alone (the assembly tree still needs them).
                 if (opened)
                 {
                     try { _swApp.CloseDoc(f.FullPath); } catch { }
@@ -266,14 +229,9 @@ namespace AtlasCadPlugin.SolidWorks
 
         public string ImportStepAsNative(string stpPath, string nativeOutPathHint)
         {
-            // OpenDoc6 with swDocPART does not invoke SolidWorks' STEP
-            // translator — it tries to load .stp as a native part and fails
-            // with errors like 2097152 on real-world STEP exports. The
-            // documented path is LoadFile4 + an ImportStepData options object.
             ImportStepData stepData = _swApp.GetImportFileData(stpPath) as ImportStepData;
             if (stepData != null)
             {
-                // Sensible defaults for headless import — no UI prompts.
                 stepData.MapConfigurationData = false;
             }
             int errors = 0;
@@ -282,8 +240,6 @@ namespace AtlasCadPlugin.SolidWorks
                 throw new InvalidOperationException(
                     $"SolidWorks could not import STEP file ({stpPath}). Errors={errors}");
 
-            // SolidWorks chooses part-vs-assembly based on STEP contents. Pick
-            // the matching extension regardless of what the caller suggested.
             int importedType = imported.GetType();
             string ext = importedType == (int)swDocumentTypes_e.swDocASSEMBLY ? ".sldasm" : ".sldprt";
             string outPath = Path.Combine(
@@ -298,7 +254,6 @@ namespace AtlasCadPlugin.SolidWorks
                 (int)swSaveAsOptions_e.swSaveAsOptions_Silent
                     | (int)swSaveAsOptions_e.swSaveAsOptions_Copy,
                 null, ref saveErrors, ref saveWarnings);
-            // Close the in-memory imported doc — the saved copy is on disk.
             _swApp.CloseDoc(imported.GetPathName());
             if (!ok || !File.Exists(outPath))
                 throw new InvalidOperationException(
@@ -309,7 +264,6 @@ namespace AtlasCadPlugin.SolidWorks
         public void InsertComponent(CadDocument activeAssembly, string filePath)
         {
             var asm = (AssemblyDoc)((IModelDoc2)activeAssembly.NativeHandle);
-            // Insert at origin (0,0,0). User can drag to position after.
             Component2 comp = asm.AddComponent5(
                 filePath,
                 (int)swAddComponentConfigOptions_e.swAddComponentConfigOptions_CurrentSelectedConfig,
@@ -326,14 +280,6 @@ namespace AtlasCadPlugin.SolidWorks
             if (swDoc.GetType() != (int)swDocumentTypes_e.swDocASSEMBLY) return result;
 
             var asm = (AssemblyDoc)swDoc;
-            // GetComponents(true) walks every component recursively. Missing
-            // children stay as Component2 objects with a path set but no
-            // file on disk + GetModelDoc2 returning null.
-            //
-            // NOTE: we deliberately do NOT skip suppressed components. When
-            // SW can't find a child file, it auto-suppresses the component
-            // (these are exactly the broken-reference ones we want to find
-            // and download). Filtering on IsSuppressed() would skip them.
             object[] components = (object[])asm.GetComponents(true);
             if (components == null) return result;
 
@@ -362,11 +308,7 @@ namespace AtlasCadPlugin.SolidWorks
         public void AddSearchFolder(string folderPath)
         {
             if (string.IsNullOrEmpty(folderPath)) return;
-            // swSearchFolders_e.swReferencedDocuments (=0) is the folder list
-            // SW checks when resolving missing child .sldprt / .sldasm
-            // references during assembly open.
             const int FolderTypeReferencedDocuments = 0;
-            // GetSearchFolders returns a single string with paths separated by ";"
             string existing = _swApp.GetSearchFolders(FolderTypeReferencedDocuments) ?? "";
             foreach (string p in existing.Split(';'))
             {
@@ -384,8 +326,6 @@ namespace AtlasCadPlugin.SolidWorks
             if (doc == null) return;
             string path = doc.GetPathName();
             int docType = doc.GetType();
-            // Close + reopen the doc so SW re-resolves all references
-            // using the (now updated) search folders.
             _swApp.CloseDoc(path);
             int errors = 0, warnings = 0;
             _swApp.OpenDoc6(
@@ -393,8 +333,6 @@ namespace AtlasCadPlugin.SolidWorks
                 (int)swOpenDocOptions_e.swOpenDocOptions_Silent,
                 "", ref errors, ref warnings);
         }
-
-        // ---- SW-specific helpers ----
 
         private static string ResolvePartNumber(IModelDoc2 doc, string filename)
         {

@@ -12,27 +12,21 @@ using INFITF;
 
 namespace AtlasCadPlugin.Catia
 {
-    /// <summary>
-    /// CATIA V5 add-in entry point. CATIA loads add-ins via COM registration
-    /// + a CATEnv environment entry pointing at the AtlasWorkbench class.
-    /// On startup the CATIA engine calls CreateCommands() and CreateInterfaces()
-    /// to hook up toolbars.
-    ///
-    /// The actual menu wiring is done via a CATScript macro (deployed by
-    /// installer/CatiaInstaller.cmd into %CATCustom%\CATStartup\). The macro
-    /// instantiates AtlasMenu and calls the ribbon callbacks below.
-    /// </summary>
     [Guid("D3A2B3D4-E5F6-7890-ABCD-EF1234567891")]
     [ComVisible(true)]
     [ClassInterface(ClassInterfaceType.AutoDual)]
     public class CatiaAddin
     {
-        private Application _catApp;
+        // Fully-qualified — `Application` alone is ambiguous between
+        // INFITF.Application (CATIA root automation object) and
+        // System.Windows.Forms.Application (the WinForms one we get from
+        // `using System.Windows.Forms;`). The CATIA one is what we want.
+        private INFITF.Application _catApp;
         private AtlasApiClient _api;
         private AuthService _auth;
         private ICadAdapter _adapter;
 
-        private const string AtlasBaseUrl = "http://172.16.2.159:8000";
+        private const string AtlasBaseUrl = "https://atlas.myeuler.in/";
         private const string OctopusBaseUrl = "https://octopus.eulerlogistics.com";
 
         public CatiaAddin()
@@ -41,7 +35,7 @@ namespace AtlasCadPlugin.Catia
                 System.Net.SecurityProtocolType.Tls12 | System.Net.SecurityProtocolType.Tls13;
         }
 
-        public void Initialize(Application catApp)
+        public void Initialize(INFITF.Application catApp)
         {
             _catApp = catApp;
             _api = new AtlasApiClient(AtlasBaseUrl);
@@ -51,8 +45,6 @@ namespace AtlasCadPlugin.Catia
             EnsureAuthenticated();
             _ = AutoUpdater.CheckAsync(_api);
         }
-
-        // ---- Menu callbacks (invoked by the CATScript macro on button click) ----
 
         public void OnPingClicked() => _ = Run(async () =>
         {
@@ -88,8 +80,6 @@ namespace AtlasCadPlugin.Catia
             EnsureAuthenticated();
         }
 
-        // ---- Auth ----
-
         private bool EnsureAuthenticated()
         {
             var existing = TokenStore.Current();
@@ -113,8 +103,6 @@ namespace AtlasCadPlugin.Catia
             MessageBox.Show("Session expired. Please sign in again.", "Atlas");
             EnsureAuthenticated();
         }
-
-        // ---- COM registration (HKLM + CATIA add-in registry entries) ----
 
         [ComRegisterFunction]
         private static void RegisterFunction(Type t)

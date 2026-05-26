@@ -21,8 +21,24 @@ set INSTALL_DIR=%ProgramFiles%\Atlas\Catia
 set CATIA_STARTUP=%APPDATA%\DassaultSystemes\CATEnv\CATStartup
 set BIN_DIR=%~dp0..\AtlasCatiaAddin\bin\Release
 
+if not defined CATIA_CODE_BIN (
+    for /D %%D in ("%ProgramFiles%\Dassault Systemes\B*") do (
+        if not defined CATIA_CODE_BIN if exist "%%~fD\win_b64\code\bin\INFITF.dll" set "CATIA_CODE_BIN=%%~fD\win_b64\code\bin"
+        if not defined CATIA_CODE_BIN if exist "%%~fD\intel_a\code\bin\INFITF.dll" set "CATIA_CODE_BIN=%%~fD\intel_a\code\bin"
+    )
+)
+
+if not defined CATIA_CODE_BIN (
+    echo Could not find CATIA interop assemblies.
+    echo Set CATIA_CODE_BIN to your CATIA code\bin folder, for example:
+    echo set CATIA_CODE_BIN=C:\Program Files\Dassault Systemes\B30\win_b64\code\bin
+    goto :error
+)
+
+echo Using CATIA_CODE_BIN=%CATIA_CODE_BIN%
+
 echo === Building CATIA add-in in Release ===
-msbuild ..\AtlasCatiaAddin\AtlasCatiaAddin.csproj /p:Configuration=Release /t:Rebuild
+msbuild ..\AtlasCatiaAddin\AtlasCatiaAddin.csproj /p:Configuration=Release "/p:CATIA_CODE_BIN=%CATIA_CODE_BIN%" /t:Rebuild
 if errorlevel 1 goto :error
 
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"

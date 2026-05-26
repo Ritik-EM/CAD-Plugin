@@ -24,11 +24,6 @@ namespace AtlasCadCore.Auth
                 : Email;
     }
 
-    /// <summary>
-    /// Persists the JWT to %APPDATA%\AtlasCad\token.dat, DPAPI-encrypted
-    /// (current-user scope). Same store regardless of which CAD host is
-    /// loading the plugin — Auth is fully CAD-agnostic.
-    /// </summary>
     public static class TokenStore
     {
         private static string Dir => Path.Combine(

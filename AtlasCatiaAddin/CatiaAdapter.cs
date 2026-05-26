@@ -11,15 +11,6 @@ using KnowledgewareTypeLib;
 
 namespace AtlasCadPlugin.Catia
 {
-    /// <summary>
-    /// CATIA V5 implementation of ICadAdapter. Uses the CATIA V5 Automation
-    /// API (INFITF / MECMOD / ProductStructureTypeLib) — same API surface
-    /// the V5 macro / VBA story uses, accessible from C# via COM interop.
-    ///
-    /// Caveat: this is written against CATIA V5R30 conventions. Older
-    /// releases may have signature mismatches; newer releases (3DEXPERIENCE)
-    /// have moved much of this into different namespaces.
-    /// </summary>
     public class CatiaAdapter : ICadAdapter
     {
         private readonly Application _catApp;
@@ -41,8 +32,6 @@ namespace AtlasCadPlugin.Catia
             if (doc == null) return null;
 
             string fullPath = doc.FullName;
-            // CATIA distinguishes Part (CATPart) and Product (CATProduct).
-            // Assembly file = .CATProduct.
             string ext = Path.GetExtension(fullPath).ToLowerInvariant();
             return new CadDocument
             {
@@ -90,8 +79,6 @@ namespace AtlasCadPlugin.Catia
             });
             seenPaths.Add(rootPath);
 
-            // ProductDocument exposes a Product whose Products collection is
-            // the immediate children. Recurse into each via its ReferenceProduct.
             var productDoc = (ProductDocument)catDoc;
             WalkProductTree(productDoc.Product, rootPn, result, seenPaths);
             return result;
@@ -104,7 +91,6 @@ namespace AtlasCadPlugin.Catia
             for (int i = 1; i <= children.Count; i++)
             {
                 Product child = children.Item(i);
-                // ReferenceProduct.Parent gives the underlying Document.
                 Document refDoc = null;
                 try { refDoc = (Document)child.ReferenceProduct.Parent; }
                 catch { continue; }
@@ -127,7 +113,6 @@ namespace AtlasCadPlugin.Catia
                     ParentPartNumber = parentPn,
                 });
 
-                // Recurse — assemblies can contain assemblies.
                 if (Path.GetExtension(fullPath).Equals(".CATProduct", StringComparison.OrdinalIgnoreCase))
                 {
                     Product nested = child.ReferenceProduct;
@@ -156,7 +141,6 @@ namespace AtlasCadPlugin.Catia
                 string stepName = Path.GetFileNameWithoutExtension(f.Filename) + ".stp";
                 string stepPath = Path.Combine(stagingDir, stepName);
 
-                // Open (or get cached) the source document, then ExportData.
                 Document srcDoc;
                 try { srcDoc = _catApp.Documents.Open(f.FullPath); }
                 catch { continue; }
@@ -164,8 +148,6 @@ namespace AtlasCadPlugin.Catia
 
                 try
                 {
-                    // ExportData("path.stp", "stp") — second arg is the format
-                    // identifier the CATIA exporter knows about.
                     srcDoc.ExportData(stepPath, "stp");
                 }
                 catch { continue; }
@@ -187,23 +169,16 @@ namespace AtlasCadPlugin.Catia
         public void InsertComponent(CadDocument activeAssembly, string filePath)
         {
             var productDoc = (ProductDocument)activeAssembly.NativeHandle;
-            // AddComponentsFromFiles takes an array of paths + a position-pattern
-            // string ("*" = each at origin). Returns the array of new Products.
             object filesArray = new object[] { filePath };
             productDoc.Product.Products.AddComponentsFromFiles((Array)filesArray, "*");
         }
 
         public string ImportStepAsNative(string stpPath, string nativeOutPathHint)
         {
-            // CATIA imports STP via Documents.Open — the engine detects the
-            // extension and runs the appropriate translator. The opened
-            // document is then SaveAs-ed to the target native path.
             Document imported = _catApp.Documents.Open(stpPath);
             if (imported == null)
                 throw new InvalidOperationException($"CATIA could not import STEP ({stpPath}).");
 
-            // Imported STEP becomes a CATPart (single body) or CATProduct
-            // (assembly). Use the actual filename CATIA picked.
             string actualName = imported.Name;
             string outPath = Path.Combine(
                 Path.GetDirectoryName(nativeOutPathHint),

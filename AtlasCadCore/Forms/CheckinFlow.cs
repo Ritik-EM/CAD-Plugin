@@ -11,18 +11,6 @@ using AtlasCadCore.Utility;
 
 namespace AtlasCadCore.Forms
 {
-    /// <summary>
-    /// Orchestrator for the part-master check-in flow. Triggered from the
-    /// ribbon "Check In" button (wired in P7.10).
-    ///   1. Identify the checked-out root part via CheckoutTracker.
-    ///   2. Walk the assembly tree (with parent links from the adapter).
-    ///   3. Show CheckinPropagationForm — user ticks modified parts; dialog
-    ///      computes ancestor propagation live.
-    ///   4. Build CheckinTreeEntry payload + multipart files.
-    ///   5. POST /cad/part-master/{root}/checkin — backend bumps revisions
-    ///      leaves-first, attaches uploaded files, releases the lock.
-    ///   6. Untrack the local path and show a summary of the bumps.
-    /// </summary>
     public static class CheckinFlow
     {
         public static async Task RunAsync(AtlasApiClient api, ICadAdapter adapter)
@@ -68,12 +56,6 @@ namespace AtlasCadCore.Forms
                 try
                 {
                     adapter.SaveDocument(doc);
-
-                    // Both assemblies and single parts go through check-in.
-                    // For an assembly we walk its tree; for a single .sldprt
-                    // we synthesise a one-entry list of the active doc so
-                    // the user can check in a single part — or check in
-                    // with no changes ticked so the lock just gets released.
                     List<AssemblyFileRef> native;
                     if (doc.IsAssembly)
                     {
@@ -101,10 +83,6 @@ namespace AtlasCadCore.Forms
                                 Filename = filename,
                                 RelativePath = filename,
                                 IsRoot = true,
-                                // The tracked part_number is the source of truth for
-                                // the active doc's identity — use it directly instead
-                                // of re-parsing the filename (which may have lost the
-                                // canonical part_number suffix).
                                 PartNumber = rootPartNumber,
                                 ParentPartNumber = null,
                                 NativeHandle = doc.NativeHandle,
@@ -119,17 +97,8 @@ namespace AtlasCadCore.Forms
                         return;
                     }
 
-                    // Surface components the adapter dropped (suppressed,
-                    // missing on disk, no path, or no resolvable part_number)
-                    // before we silently exclude them from the check-in tree.
-                    // Silently dropping was hiding the parts a user had actually
-                    // edited from the propagation grid.
                     var dropped = native.Where(n => !string.IsNullOrEmpty(n.SkipReason)).ToList();
 
-                    // Always log what the adapter returned so we can diagnose
-                    // "only N rows in the grid" complaints without forcing the
-                    // user through a rebuild loop. Writes silently to
-                    // %APPDATA%\AtlasCad\walk_assembly.log on every check-in.
                     try
                     {
                         string logDir = Path.Combine(
@@ -189,12 +158,6 @@ namespace AtlasCadCore.Forms
                         return;
                     }
 
-                    // Export a STEP per native file — each revision needs
-                    // its own current .stp so atlas-ui's 3D viewer reflects
-                    // the latest geometry for every part, not just the root.
-                    // Adapter uses the already-loaded IModelDoc2 captured in
-                    // WalkAssembly to skip OpenDoc6, and reports per-file
-                    // progress so the user can see which child is exporting.
                     stepDir = Path.Combine(Path.GetTempPath(), "AtlasCadStep_" + Guid.NewGuid().ToString("N"));
                     progress.SetPhase("Exporting STEP files…", 0, native.Count);
                     var steps = adapter.ExportStep(
@@ -213,13 +176,8 @@ namespace AtlasCadCore.Forms
                         progress.SetPhase($"Hashing files… {n}/{all.Count}", n, all.Count);
                     });
 
-                    // Per-part bundle: native + optional STP + depth in tree.
                     var entries = BuildPartEntries(native, steps, rootPartNumber);
 
-                    // Empty tree usually means every file's filename failed
-                    // PartNumberParser. Surface this clearly rather than
-                    // sending an empty tree to the backend (which would just
-                    // return "Tree is empty").
                     if (entries.Count == 0)
                     {
                         progress.Hide();
@@ -235,10 +193,6 @@ namespace AtlasCadCore.Forms
                         return;
                     }
 
-                    // Verify the resolved root part_number actually appears
-                    // in the walked tree. If not, CheckoutTracker pointed at
-                    // a different file than what's currently open — usually
-                    // a stale entry from a previous session.
                     if (!entries.Any(e => string.Equals(e.PartNumber, rootPartNumber, StringComparison.OrdinalIgnoreCase)))
                     {
                         progress.Hide();
@@ -257,13 +211,6 @@ namespace AtlasCadCore.Forms
                         return;
                     }
 
-                    // Pre-validate every part_number against part_master_library
-                    // BEFORE we open the propagation dialog. If any are unknown
-                    // to atlas (legacy parts, parts added in SW but never
-                    // uploaded), the backend would return a 400 with a raw
-                    // JSON message ("Tree references unknown part_numbers:
-                    // [...]") that's hard to act on. Surface them here with
-                    // their filenames + a clear "Upload to Atlas first" hint.
                     progress.SetPhase("Validating part_numbers against atlas…");
                     PartLookupResult lookup;
                     try
@@ -289,13 +236,6 @@ namespace AtlasCadCore.Forms
                             .Where(e => missingSet.Contains(e.PartNumber))
                             .ToList();
 
-                        // Policy: the plugin no longer mints part_master
-                        // entries on the fly. New part_numbers must be
-                        // released via atlas-ui first (single source of
-                        // truth for the metadata + reviewer workflow).
-                        // Surface a clear list and bail; the lock stays
-                        // held so the user can release on atlas-ui and
-                        // retry Check In without re-Checking Out.
                         var msg = new StringBuilder();
                         msg.AppendLine(
                             $"{missingDetails.Count} part(s) in this assembly aren't released on atlas yet:");
@@ -315,11 +255,6 @@ namespace AtlasCadCore.Forms
                     }
                     progress.Show();
 
-                    // Pre-tick "Modified" for parts whose current sha256
-                    // differs from the baseline captured at Check Out. The
-                    // baseline is keyed by root part_number in FileHashStash;
-                    // if nothing is stashed (e.g. checked out before this
-                    // feature shipped), we just fall back to all-unticked.
                     var baseline = FileHashStash.Get(rootPartNumber)
                                    ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                     bool HasBaselineChanged(PartEntry e)
@@ -365,9 +300,6 @@ namespace AtlasCadCore.Forms
                     progress.Done();
 
                     CheckoutTracker.Untrack(doc.FullPath);
-                    // After a successful check-in the bumped revisions get
-                    // fresh part_numbers and the local files are stale, so
-                    // the baseline hashes are no longer meaningful.
                     FileHashStash.Clear(rootPartNumber);
                     MessageBox.Show(BuildSummary(result), "Atlas — Check In",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -399,7 +331,6 @@ namespace AtlasCadCore.Forms
                 .GroupBy(s => s.PartNumber)
                 .ToDictionary(g => g.Key, g => g.First());
 
-            // Index native by part_number first so depth can be computed.
             var nativeByPart = new Dictionary<string, AssemblyFileRef>(StringComparer.OrdinalIgnoreCase);
             foreach (var n in native)
             {

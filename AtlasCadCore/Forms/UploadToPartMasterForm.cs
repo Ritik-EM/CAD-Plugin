@@ -10,23 +10,6 @@ using AtlasCadCore.Utility;
 
 namespace AtlasCadCore.Forms
 {
-    /// <summary>
-    /// First-time upload orchestrator. Plugin is attach-only — releasing
-    /// new part_numbers happens on atlas-ui, never from the plugin. Sequence:
-    ///   1. Walk active assembly tree + export STEP per native file.
-    ///   2. POST /cad/part-master/upload — backend attaches files to existing
-    ///      part_master revisions, returns missing_parts for unknowns.
-    ///   3. For each missing part: show MissingPartChoiceForm offering
-    ///      "Pick Existing" (attach the file to a different existing
-    ///      part_number) or "Skip".
-    ///   4. Summary lists every skipped / unreleased part_number so the user
-    ///      knows what to release on atlas-ui before re-running Upload.
-    ///
-    /// Despite the "Form" name in the filename, this is a static orchestrator
-    /// — the only WinForms it owns are ProgressForm + MissingPartChoiceForm,
-    /// invoked inline. Kept as a class (not free function) so the API surface
-    /// is namespaced + testable.
-    /// </summary>
     public static class UploadToPartMasterForm
     {
         public static async Task RunAsync(AtlasApiClient api, ICadAdapter adapter)
@@ -47,21 +30,11 @@ namespace AtlasCadCore.Forms
                 {
                     adapter.SaveDocument(doc);
 
-                    // Both assemblies and single parts go through this flow.
-                    // For an assembly we walk its tree; for a single .sldprt
-                    // we synthesise a one-entry list of just the open doc so
-                    // the user can push a brand-new part to atlas without
-                    // needing to wrap it in an assembly first.
                     List<AssemblyFileRef> native;
                     if (doc.IsAssembly)
                     {
                         progress.SetPhase("Walking assembly tree…");
                         native = adapter.WalkAssembly(doc) ?? new List<AssemblyFileRef>();
-                        // Drop suppressed / missing-file / no-path entries —
-                        // they're surfaced by WalkAssembly so Check In can
-                        // warn about them, but Upload silently skips them
-                        // to preserve the existing behaviour of "upload what
-                        // we have, ignore the unfit instances".
                         native = native.Where(n => string.IsNullOrEmpty(n.SkipReason)).ToList();
                     }
                     else
@@ -93,9 +66,6 @@ namespace AtlasCadCore.Forms
                     }
                     EnsurePlaceholderPartNumbers(native);
 
-                    // Export a STEP per native file. Adapter reuses the
-                    // IModelDoc2 captured during WalkAssembly so OpenDoc6 is
-                    // skipped — the main cost is then just SaveAs per child.
                     stepDir = Path.Combine(Path.GetTempPath(), "AtlasCadStep_" + Guid.NewGuid().ToString("N"));
                     progress.SetPhase("Exporting STEP files…", 0, native.Count);
                     var steps = adapter.ExportStep(
@@ -114,16 +84,8 @@ namespace AtlasCadCore.Forms
                         progress.SetPhase($"Hashing files… {n}/{all.Count}", n, all.Count);
                     });
 
-                    // Build one tree entry per part_number: pair native + step.
                     var byPart = BuildPerPartEntries(native, steps);
 
-                    // Pre-pass: for entries whose filename code isn't an
-                    // exact 10-char match, try resolving against atlas with
-                    // code+"00" (the convention atlas uses for the first
-                    // PRODUCTION revision of a part). If we find a match,
-                    // rewrite the entry to use the canonical part_number so
-                    // the upload attaches to the existing entry instead of
-                    // landing in missing_parts.
                     progress.SetPhase("Resolving part_numbers against atlas…");
                     byPart = await ResolveAgainstAtlasAsync(api, byPart);
 
@@ -136,19 +98,10 @@ namespace AtlasCadCore.Forms
                     var stillMissing = firstPass.missing_parts ?? new List<MissingPartDto>();
                     int attachedFromPickedExisting = 0;
                     int skipped = 0;
-                    // Track parts the user neither attached-to-existing nor
-                    // skipped — i.e. the ones that need to be released on
-                    // atlas-ui before re-running Upload. We list them in the
-                    // final summary so the user has an actionable next step.
                     var unreleasedAfterPicks = new List<MissingPartDto>();
 
                     if (stillMissing.Count > 0)
                     {
-                        // Per missing part: ask Pick Existing / Skip. Creating
-                        // brand-new part_numbers is intentionally NOT offered
-                        // here — atlas-ui is the single source of truth for
-                        // releasing new part_numbers (metadata + reviewer
-                        // workflow). The plugin is attach-only.
                         progress.Hide();
                         var pickedExistingRemap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                         foreach (var m in stillMissing)
@@ -163,9 +116,6 @@ namespace AtlasCadCore.Forms
                                 }
                                 else
                                 {
-                                    // Skip OR closed-without-picking: this
-                                    // part_number needs to be released on
-                                    // atlas-ui before it can be uploaded.
                                     unreleasedAfterPicks.Add(m);
                                     skipped++;
                                 }
@@ -173,7 +123,6 @@ namespace AtlasCadCore.Forms
                         }
                         progress.Show();
 
-                        // Attach to existing part_numbers the user picked.
                         if (pickedExistingRemap.Count > 0)
                         {
                             var subset = byPart
@@ -223,14 +172,6 @@ namespace AtlasCadCore.Forms
 
         private static void EnsurePlaceholderPartNumbers(List<AssemblyFileRef> entries)
         {
-            // For files whose filename doesn't match the strict 10-char
-            // part_number pattern, fall back through two stages:
-            //   1. extract the leading alphanumeric code (e.g. "EL530012"
-            //      from "EL530012_HEXAGON WELD NUT...sldprt") — this gives
-            //      the ResolveAgainstAtlasAsync pre-pass a clean stem to
-            //      pad with "00" and look up in atlas
-            //   2. if even that fails, last-resort to the bare filename
-            //      uppercased so the chooser dialog has *something* to show
             foreach (var e in entries)
             {
                 if (!string.IsNullOrEmpty(e.PartNumber)) continue;
@@ -241,14 +182,6 @@ namespace AtlasCadCore.Forms
             }
         }
 
-        /// <summary>
-        /// Pre-pass before /upload: for each entry whose part_number isn't a
-        /// strict 10-char code, try resolving it against atlas with
-        /// code+"00" exact match (atlas's first PRODUCTION revision
-        /// convention). When a match is found, rewrite the entry to use the
-        /// canonical atlas part_number so the upload attaches to the
-        /// existing entry instead of landing in missing_parts.
-        /// </summary>
         private static async Task<List<PartEntry>> ResolveAgainstAtlasAsync(
             AtlasApiClient api, List<PartEntry> entries)
         {
@@ -274,11 +207,6 @@ namespace AtlasCadCore.Forms
             return result;
         }
 
-        /// <summary>
-        /// Search atlas for an exact part_number match. Returns the canonical
-        /// part_number if a doc has a revision (any release_type) whose
-        /// part_number equals `candidate`, otherwise null.
-        /// </summary>
         private static async Task<string> TryExactMatchAsync(AtlasApiClient api, string candidate)
         {
             try

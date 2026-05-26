@@ -7,15 +7,6 @@ using AtlasCadCore.ApiClient;
 
 namespace AtlasCadCore.Forms
 {
-    /// <summary>
-    /// Shown by UploadToPartMaster when the upload returned missing_parts —
-    /// each row is one part that has no part_master entry yet. User fills the
-    /// metadata fields, OK builds the CreateBatchEntryDto list.
-    ///
-    /// Defaults panel at the top lets the user fill the common fields once
-    /// and apply them to every empty cell — meaningful when uploading a tree
-    /// where most parts share project/group/model.
-    /// </summary>
     public class AssignPartMetadataForm : Form
     {
         private readonly List<MissingPartDto> _missing;
@@ -45,10 +36,7 @@ namespace AtlasCadCore.Forms
                 Text = $"{_missing.Count} part(s) don't exist in part_master_library yet. " +
                        "Fill in the metadata below — Atlas will mint a fresh part_number for each.",
             };
-            // (hdr / defaults / _grid / btnPanel all added below in the
-            // correct order — Top + Bottom siblings first, Fill grid LAST.)
 
-            // Defaults panel
             var defaults = new GroupBox { Dock = DockStyle.Fill, Text = "Defaults (apply to empty cells)", Padding = new Padding(8) };
             int x = 10, y = 22, lblW = 80, fldW = 100, gap = 8;
 
@@ -83,7 +71,6 @@ namespace AtlasCadCore.Forms
 
             Controls.Add(defaults);
 
-            // Grid
             _grid = new DataGridView
             {
                 Dock = DockStyle.Fill,
@@ -113,17 +100,13 @@ namespace AtlasCadCore.Forms
             };
             rtCol.Items.AddRange(new object[] { "PROTO", "PRODUCTION", "ALTERNATE_PART" });
             _grid.Columns.Add(rtCol);
-            // _grid will be added LAST (after btnPanel below) so its top
-            // row doesn't get clipped under the docked defaults panel.
 
-            // Buttons
             var btnPanel = new Panel { Dock = DockStyle.Fill, Height = 44 };
             var ok = new Button { Text = "Create & Upload", Location = new Point(btnPanel.Width - 280, 10), Anchor = AnchorStyles.Right, Width = 130, DialogResult = DialogResult.OK };
             ok.Click += (s, e) => OnOk();
             var cancel = new Button { Text = "Cancel", Location = new Point(btnPanel.Width - 140, 10), Anchor = AnchorStyles.Right, Width = 100, DialogResult = DialogResult.Cancel };
             btnPanel.Controls.Add(ok);
             btnPanel.Controls.Add(cancel);
-            // 4-row TableLayoutPanel — deterministic layout, no z-order tricks.
             var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 4 };
             outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 40f));    // hdr
@@ -183,8 +166,6 @@ namespace AtlasCadCore.Forms
 
         private void OnOk()
         {
-            // Mandatory: project_identifier, major_group, minor_group, release_type.
-            // description + model + vehicle_category are accepted as nullable.
             var entries = new List<CreateBatchEntryDto>();
             for (int i = 0; i < _grid.Rows.Count; i++)
             {

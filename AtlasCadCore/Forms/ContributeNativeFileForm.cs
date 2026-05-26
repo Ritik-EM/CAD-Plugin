@@ -8,17 +8,6 @@ using AtlasCadCore.ApiClient;
 
 namespace AtlasCadCore.Forms
 {
-    /// <summary>
-    /// Confirmation dialog shown after a STP-import-as-native happens (e.g.
-    /// user clicked "Open" on a part_master revision that only had a STP
-    /// reference). The plugin has materialised a native CAD file from the
-    /// STP — this form asks whether to upload that file back to atlas so
-    /// the next user gets a real native checkout instead of imported geometry.
-    ///
-    /// Result: bool Confirmed + string Comment. Caller does the actual
-    /// /cad/part-master/upload call (or use ContributeNativeFileForm.RunAsync
-    /// which handles the upload + summary in one shot).
-    /// </summary>
     public class ContributeNativeFileForm : Form
     {
         private TextBox _commentBox;
@@ -76,11 +65,6 @@ namespace AtlasCadCore.Forms
             CancelButton = skip;
         }
 
-        /// <summary>
-        /// One-shot helper: show the dialog, and if confirmed, upload the file
-        /// via /cad/part-master/upload (single-entry tree, no STP since the
-        /// STP is already in the library). Shows a result MessageBox.
-        /// </summary>
         public static async Task RunAsync(AtlasApiClient api, string partNumber, string nativeFilePath, string sourceLabel)
         {
             if (string.IsNullOrEmpty(partNumber) || string.IsNullOrEmpty(nativeFilePath) || !File.Exists(nativeFilePath))
@@ -121,9 +105,6 @@ namespace AtlasCadCore.Forms
                 }
                 else if (missing > 0)
                 {
-                    // Should not happen — caller only invokes this for an existing
-                    // part. If it does, the part_number disappeared between the
-                    // browse list and this upload (deleted by someone else, etc.).
                     MessageBox.Show(
                         $"Atlas no longer recognises {partNumber} — the part may have been deleted.",
                         "Atlas", MessageBoxButtons.OK, MessageBoxIcon.Warning);

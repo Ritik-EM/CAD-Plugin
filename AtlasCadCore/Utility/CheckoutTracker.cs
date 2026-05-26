@@ -5,11 +5,6 @@ using Newtonsoft.Json;
 
 namespace AtlasCadCore.Utility
 {
-    /// <summary>
-    /// Maps local file paths back to their checked-out part_number so a
-    /// "Check In" click knows which part_master entry to update. Persisted at
-    /// %APPDATA%\AtlasCad\active_checkouts.json. Shared across all CAD hosts.
-    /// </summary>
     public static class CheckoutTracker
     {
         private static string Dir => Path.Combine(
@@ -52,22 +47,11 @@ namespace AtlasCadCore.Utility
             return map.TryGetValue(rootFilePath, out var pn) ? pn : null;
         }
 
-        /// <summary>
-        /// Resolves a CAD-reported path back to a tracked part_number with two
-        /// fallback strategies:
-        ///   1. exact path match (the common case),
-        ///   2. directory-prefix match — useful when SolidWorks activates a
-        ///      child .sldprt inside a checked-out .sldasm, since both live
-        ///      under the same %TEMP%\AtlasCad\&lt;part_number&gt;\ folder.
-        /// Returns null when no checkout encompasses this path.
-        /// </summary>
         public static string ResolvePartNumberForPath(string activeFilePath)
         {
             if (string.IsNullOrEmpty(activeFilePath)) return null;
             var map = Load();
 
-            // Exact match first — preferred so we always pick the file the
-            // user explicitly checked out when there's a tie.
             if (map.TryGetValue(activeFilePath, out var pn)) return pn;
 
             string activeDir = Path.GetDirectoryName(activeFilePath);
@@ -93,11 +77,6 @@ namespace AtlasCadCore.Utility
             if (map.Remove(rootFilePath)) Save(map);
         }
 
-        /// <summary>
-        /// Remove every tracker entry pointing at `partNumber`. Used by
-        /// Cancel Checkout so the local file→part_number mapping doesn't
-        /// outlive the backend lock and trip Check In on the next session.
-        /// </summary>
         public static void UntrackByPartNumber(string partNumber)
         {
             if (string.IsNullOrEmpty(partNumber)) return;

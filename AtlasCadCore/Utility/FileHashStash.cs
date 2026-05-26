@@ -5,16 +5,6 @@ using Newtonsoft.Json;
 
 namespace AtlasCadCore.Utility
 {
-    /// <summary>
-    /// Persistent stash of SHA-256 hashes captured at Check Out time, keyed
-    /// by the checked-out root part_number. At Check In, the plugin reads
-    /// this back, recomputes current hashes, and pre-ticks any row whose
-    /// sha256 has changed since checkout — so the user doesn't have to
-    /// hand-tick every modified part in a 30-component assembly.
-    ///
-    /// Stored at %APPDATA%\AtlasCad\file_hashes.json:
-    ///   { "AN5T00960A": { "AN5T00970A": "abc…", "AN5T00980A": "def…" }, … }
-    /// </summary>
     public static class FileHashStash
     {
         private static string Dir => Path.Combine(
@@ -53,11 +43,6 @@ namespace AtlasCadCore.Utility
             Save(stash);
         }
 
-        /// <summary>
-        /// Returns the stash captured at Check Out for `rootPartNumber`,
-        /// or null if no stash exists (e.g. the user checked out before
-        /// this feature shipped, or the stash got cleared).
-        /// </summary>
         public static IDictionary<string, string> Get(string rootPartNumber)
         {
             if (string.IsNullOrEmpty(rootPartNumber)) return null;

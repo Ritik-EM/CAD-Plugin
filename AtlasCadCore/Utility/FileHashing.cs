@@ -18,9 +18,6 @@ namespace AtlasCadCore.Utility
             }
         }
 
-        // Files that are open in a CAD host (any of SW/CATIA/NX) have an
-        // exclusive read lock. FileShare.ReadWrite | Delete tells Windows
-        // we're fine reading while the host holds the file.
         private static Stream OpenSharedRead(string path)
         {
             return new FileStream(path, FileMode.Open, FileAccess.Read,

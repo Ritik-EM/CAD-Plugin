@@ -8,12 +8,6 @@ using AtlasCadCore.ApiClient;
 
 namespace AtlasCadCore.Forms
 {
-    /// <summary>
-    /// Modal dialog shown before a check-in is committed. User ticks which
-    /// parts they actually modified ("changed"); the dialog computes ancestor
-    /// propagation live and shows the final to-be-bumped set. OK confirms and
-    /// the orchestrator commits via POST /cad/part-master/{root}/checkin.
-    /// </summary>
     public class CheckinPropagationForm : Form
     {
         public class TreeRow
@@ -104,14 +98,8 @@ namespace AtlasCadCore.Forms
                 if (_grid.IsCurrentCellDirty) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
             };
 
-            // bottom now fills its cell in the outer TableLayoutPanel (rather
-            // than docking to the form bottom). Same deterministic layout
-            // pattern used elsewhere — keeps the grid's middle area from
-            // being eaten by z-order conflicts between Dock=Fill and
-            // Dock=Bottom siblings.
             var bottom = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10) };
 
-            // Row 1: Comment
             bottom.Controls.Add(new Label { Text = "Comment (optional):", Location = new Point(10, 6), AutoSize = true });
             _commentBox = new TextBox
             {
@@ -124,7 +112,6 @@ namespace AtlasCadCore.Forms
             };
             bottom.Controls.Add(_commentBox);
 
-            // Row 2: OTP — required to authorise the whole revision batch
             bottom.Controls.Add(new Label { Text = "OTP (sent to your email):", Location = new Point(10, 86), AutoSize = true, Font = new Font(Font, FontStyle.Bold) });
             _otpBox = new TextBox
             {
@@ -155,7 +142,6 @@ namespace AtlasCadCore.Forms
             };
             bottom.Controls.Add(_otpStatusLabel);
 
-            // Row 3: summary + buttons
             _summaryLabel = new Label
             {
                 Location = new Point(10, 145),
@@ -165,10 +151,6 @@ namespace AtlasCadCore.Forms
             };
             bottom.Controls.Add(_summaryLabel);
 
-            // Anchor=Top|Right because the cell is exactly 200px tall — Y=160
-            // is measured from the top of the cell, which is reliable. The
-            // earlier Anchor=Bottom version produced an off-cell Y when the
-            // parent TableLayoutPanel resized the panel.
             var ok = new Button { Text = "Confirm Check In", Width = 140, Height = 28, DialogResult = DialogResult.None, Anchor = AnchorStyles.Top | AnchorStyles.Right };
             ok.Location = new Point(bottom.Width - 290, 160);
             ok.Click += (s, e) =>
@@ -199,10 +181,6 @@ namespace AtlasCadCore.Forms
             AcceptButton = ok;
             CancelButton = cancel;
 
-            // Outer 3-row TableLayoutPanel — deterministic layout. Same
-            // pattern used by the other Atlas dialogs to avoid the
-            // Dock=Top/Fill/Bottom z-order issue that was hiding the grid
-            // entirely in some screen-size configurations.
             var outer = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -243,9 +221,6 @@ namespace AtlasCadCore.Forms
 
         private void PopulateGrid()
         {
-            // Sort: leaves first (deeper depth), then alphabetical — mirrors
-            // the order the backend will process the bumps in, which makes
-            // the propagation easier to reason about visually.
             foreach (var r in _rows.OrderByDescending(r => r.Depth).ThenBy(r => r.PartNumber))
             {
                 int idx = _grid.Rows.Add(

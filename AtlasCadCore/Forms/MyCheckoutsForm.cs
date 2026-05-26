@@ -9,13 +9,6 @@ using AtlasCadCore.Utility;
 
 namespace AtlasCadCore.Forms
 {
-    /// <summary>
-    /// Dialog showing every active part_master lock owned by the current
-    /// user. Multi-select via checkboxes, then Release Selected (or Release
-    /// All) calls /cancel-checkout per part and clears the local
-    /// CheckoutTracker entry so the in-progress state on this machine
-    /// matches the server.
-    /// </summary>
     public class MyCheckoutsForm : Form
     {
         private readonly AtlasApiClient _api;
@@ -75,11 +68,6 @@ namespace AtlasCadCore.Forms
                 if (_grid.IsCurrentCellDirty) _grid.CommitEdit(DataGridViewDataErrorContexts.Commit);
             };
 
-            // 3-column TableLayoutPanel for the bottom row: status fills,
-            // two buttons auto-size on the right. This avoids the broken
-            // "Anchor=Bottom + Location based on bottom.Width" pattern that
-            // pushed the buttons off-cell when the parent TableLayoutPanel
-            // resized this panel after construction.
             var bottom = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
