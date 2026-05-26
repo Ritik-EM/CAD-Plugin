@@ -20,11 +20,12 @@ msbuild ..\AtlasSolidWorksAddin\AtlasSolidWorksAddin.csproj /p:Configuration=Rel
 if errorlevel 1 goto :error
 
 echo === Compiling WiX source ===
-candle Product.wxs -out Product.wixobj
+REM -ext WixUtilExtension is for util:CloseApplication (block install while SW is running).
+candle -ext WixUtilExtension Product.wxs -out Product.wixobj
 if errorlevel 1 goto :error
 
 echo === Linking MSI ===
-light -ext WixUIExtension Product.wixobj -out AtlasCadPlugin-SolidWorks.msi
+light -ext WixUIExtension -ext WixUtilExtension Product.wixobj -out AtlasCadPlugin-SolidWorks.msi
 if errorlevel 1 goto :error
 
 if defined SIGN_CERT (

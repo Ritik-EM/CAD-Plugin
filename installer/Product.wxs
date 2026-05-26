@@ -17,11 +17,12 @@
 
   The COM GUID below must match AtlasAddin.cs [Guid(...)] attribute.
 -->
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
   <Product Id="*"
            Name="Atlas CAD Plugin"
            Language="1033"
-           Version="2.0.0.0"
+           Version="3.0.2.0"
            Manufacturer="Euler Motors"
            UpgradeCode="A2A2B3D4-E5F6-7890-ABCD-EF1234567891">
 
@@ -31,7 +32,28 @@
              Platform="x64"
              Description="Atlas CAD integration for SolidWorks" />
 
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Atlas CAD Plugin is already installed." />
+    <!-- Upgrade behaviour:
+         - Schedule="afterInstallInitialize" removes the old version BEFORE
+           the new one writes any files. Default schedule does it after,
+           which means new + old briefly coexist and the deletion of the
+           old can clobber files that v2 just wrote to the same path.
+         - AllowSameVersionUpgrades="yes" lets you reinstall the same
+           Version cleanly (useful for hotfix re-runs without bumping).
+         - DowngradeErrorMessage blocks going from v3 → v2 by accident. -->
+    <MajorUpgrade
+        Schedule="afterInstallInitialize"
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of Atlas CAD Plugin is already installed." />
+
+    <!-- Block install while SolidWorks is running. The DLL would be
+         locked and the upgrade would silently half-fail otherwise. -->
+    <util:CloseApplication Id="CloseSldworks"
+                           Target="sldworks.exe"
+                           CloseMessage="no"
+                           RebootPrompt="no"
+                           PromptToContinue="yes"
+                           Description="SolidWorks is open. Close it before installing Atlas CAD Plugin." />
+
     <MediaTemplate EmbedCab="yes" />
 
     <Feature Id="ProductFeature" Title="AtlasCadPlugin" Level="1">
@@ -48,22 +70,20 @@
 
     <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
       <!--
-        The plugin DLL. KeyPath + Win64 + RegisterAssembly puts the COM
-        registration into the MSI itself so an uninstall fully reverses it.
-        SelfRegCost > 0 prevents WiX yelling about regasm; the actual COM
-        registration happens via the Class element below.
+        The plugin DLL. NO Assembly=".net" — that directive installs to the
+        GAC, not what we need. SW reads HKLM\Software\Classes\CLSID\{guid}
+        to find the addin DLL. We write that ourselves via the Class +
+        RegistryValue elements below, and a CustomAction calls regasm at
+        the end of install so the type-library registration is complete.
       -->
       <Component Id="MainDll" Guid="*" Win64="yes">
         <File Id="AtlasSolidWorksAddinDll"
               Source="..\AtlasSolidWorksAddin\bin\Release\AtlasSolidWorksAddin.dll"
-              KeyPath="yes"
-              Assembly=".net"
-              AssemblyApplication="AtlasSolidWorksAddinDll"
-              AssemblyManifest="AtlasSolidWorksAddinDll" />
+              KeyPath="yes" />
 
         <!-- SolidWorks add-in discovery key — points SW at our COM class.
              The unnamed REG_DWORD = 1 is the "enabled by default" flag SW
-             looks for; in WiX you express the default (unnamed) value by
+             looks for; in WiX the default (unnamed) value is expressed by
              omitting the Name attribute, not by setting Name="". -->
         <RegistryKey Root="HKLM"
                      Key="SOFTWARE\SolidWorks\AddIns\{E3A2B3D4-E5F6-7890-ABCD-EF1234567890}">
@@ -84,7 +104,66 @@
               Source="..\packages\Newtonsoft.Json.13.0.3\lib\net45\Newtonsoft.Json.dll"
               KeyPath="yes" />
       </Component>
+
+      <!-- SolidWorks Interop assemblies — must ship alongside the addin
+           DLL so .NET can resolve them at load time. The dev-build copies
+           pulled them from C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\api\
+           redist\ into the project's bin\Release\ (CopyLocal=True). We
+           re-ship them from there so a fresh laptop doesn't need a dev
+           install of SOLIDWORKS API SDK. -->
+      <Component Id="SldworksInterop" Guid="*" Win64="yes">
+        <File Source="..\AtlasSolidWorksAddin\bin\Release\SolidWorks.Interop.sldworks.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="SwcommandsInterop" Guid="*" Win64="yes">
+        <File Source="..\AtlasSolidWorksAddin\bin\Release\SolidWorks.Interop.swcommands.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="SwconstInterop" Guid="*" Win64="yes">
+        <File Source="..\AtlasSolidWorksAddin\bin\Release\SolidWorks.Interop.swconst.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="SwpublishedInterop" Guid="*" Win64="yes">
+        <File Source="..\AtlasSolidWorksAddin\bin\Release\SolidWorks.Interop.swpublished.dll" KeyPath="yes" />
+      </Component>
     </ComponentGroup>
+
+    <!-- COM registration via regasm /codebase. WiX's Assembly=".net" only
+         touches the GAC and doesn't write the CLSID entries SW needs.
+         CustomAction calls the framework's regasm.exe at install time
+         (deferred + impersonate=no = elevated, since HKLM\Classes\CLSID
+         is a privileged write). The Unregister action runs on uninstall.
+
+         Path uses [WindowsFolder]\Microsoft.NET\Framework64\v4.0.30319
+         which is guaranteed present on any 64-bit Windows with .NET 4.x.
+         -->
+    <SetProperty Id="RegasmInstall"
+                 Value="&quot;[WindowsFolder]Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe&quot; &quot;[INSTALLFOLDER]AtlasSolidWorksAddin.dll&quot; /codebase"
+                 Sequence="execute" Before="RegasmInstall" />
+    <SetProperty Id="RegasmUninstall"
+                 Value="&quot;[WindowsFolder]Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe&quot; &quot;[INSTALLFOLDER]AtlasSolidWorksAddin.dll&quot; /unregister"
+                 Sequence="execute" Before="RegasmUninstall" />
+
+    <CustomAction Id="RegasmInstall"
+                  BinaryKey="WixCA"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+    <CustomAction Id="RegasmUninstall"
+                  BinaryKey="WixCA"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!-- Install: after files are on disk, before InstallFinalize commits. -->
+      <Custom Action="RegasmInstall" After="InstallFiles">
+        NOT REMOVE
+      </Custom>
+      <!-- Uninstall: before files are removed (regasm needs the DLL on disk). -->
+      <Custom Action="RegasmUninstall" Before="RemoveFiles">
+        REMOVE="ALL"
+      </Custom>
+    </InstallExecuteSequence>
 
     <UIRef Id="WixUI_Minimal" />
   </Product>
