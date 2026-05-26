@@ -22,7 +22,15 @@ set CATIA_STARTUP=%APPDATA%\DassaultSystemes\CATEnv\CATStartup
 set BIN_DIR=%~dp0..\AtlasCatiaAddin\bin\Release
 
 if not defined CATIA_CODE_BIN (
+    REM Search both 64-bit (Program Files) and 32-bit (Program Files (x86))
+    REM install roots. Older CATIA releases (V5R21 and earlier) are 32-bit
+    REM and land in the (x86) tree. Within each, win_b64 / intel_a are the
+    REM two arch subdirs CATIA uses across versions.
     for /D %%D in ("%ProgramFiles%\Dassault Systemes\B*") do (
+        if not defined CATIA_CODE_BIN if exist "%%~fD\win_b64\code\bin\INFITF.dll" set "CATIA_CODE_BIN=%%~fD\win_b64\code\bin"
+        if not defined CATIA_CODE_BIN if exist "%%~fD\intel_a\code\bin\INFITF.dll" set "CATIA_CODE_BIN=%%~fD\intel_a\code\bin"
+    )
+    for /D %%D in ("%ProgramFiles(x86)%\Dassault Systemes\B*") do (
         if not defined CATIA_CODE_BIN if exist "%%~fD\win_b64\code\bin\INFITF.dll" set "CATIA_CODE_BIN=%%~fD\win_b64\code\bin"
         if not defined CATIA_CODE_BIN if exist "%%~fD\intel_a\code\bin\INFITF.dll" set "CATIA_CODE_BIN=%%~fD\intel_a\code\bin"
     )

@@ -98,7 +98,9 @@ namespace AtlasCadPlugin.Catia
 
                 string fullPath = refDoc.FullName;
                 if (string.IsNullOrEmpty(fullPath)) continue;
-                if (!File.Exists(fullPath)) continue;
+                // Fully-qualified System.IO.File — `File` alone is ambiguous
+                // between INFITF.File (a CATIA type) and System.IO.File.
+                if (!System.IO.File.Exists(fullPath)) continue;
                 if (!seenPaths.Add(fullPath)) continue;
 
                 string childFilename = Path.GetFileName(fullPath);
@@ -152,7 +154,7 @@ namespace AtlasCadPlugin.Catia
                 }
                 catch { continue; }
 
-                if (!File.Exists(stepPath)) continue;
+                if (!System.IO.File.Exists(stepPath)) continue;
 
                 result.Add(new AssemblyFileRef
                 {
@@ -179,7 +181,10 @@ namespace AtlasCadPlugin.Catia
             if (imported == null)
                 throw new InvalidOperationException($"CATIA could not import STEP ({stpPath}).");
 
-            string actualName = imported.Name;
+            // R21 generates Document.Name as get_Name()/set_Name(ref string)
+            // — newer CATIA versions wrap it as a clean property accessor.
+            // Use the explicit accessor so the build works on either.
+            string actualName = imported.get_Name();
             string outPath = Path.Combine(
                 Path.GetDirectoryName(nativeOutPathHint),
                 Path.GetFileNameWithoutExtension(nativeOutPathHint) + Path.GetExtension(actualName));
@@ -192,7 +197,7 @@ namespace AtlasCadPlugin.Catia
             {
                 try { imported.Close(); } catch { }
             }
-            if (!File.Exists(outPath))
+            if (!System.IO.File.Exists(outPath))
                 throw new InvalidOperationException($"SaveAs '{outPath}' produced no file.");
             return outPath;
         }
