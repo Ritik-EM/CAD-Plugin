@@ -119,7 +119,7 @@ namespace AtlasCadPlugin.SolidWorks
             }
         }
 
-        public void OnPingClicked() => _ = Run(async () =>
+        public void OnPingClicked() => _ = Run("Ping", async () =>
         {
             string result = await _api.PingAsync();
             var who = TokenStore.Current();
@@ -128,7 +128,7 @@ namespace AtlasCadPlugin.SolidWorks
                 MessageBoxButtons.OK, MessageBoxIcon.Information);
         });
 
-        public void OnUploadClicked() => _ = Run(() => UploadToPartMasterForm.RunAsync(_api, _adapter));
+        public void OnUploadClicked() => _ = Run("Upload", () => UploadToPartMasterForm.RunAsync(_api, _adapter));
 
         public void OnBrowseClicked()
         {
@@ -137,16 +137,12 @@ namespace AtlasCadPlugin.SolidWorks
                 using (var form = new BrowsePartMasterForm(_api, _adapter)) { form.ShowDialog(); }
             }
             catch (UnauthorizedException) { HandleUnauthorized(); }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Browse failed:\n\n" + ex, "Atlas",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            catch (Exception ex) { AtlasErrorReporter.Show("Browse failed", "OnBrowseClicked", ex); }
         }
 
-        public void OnCheckinClicked() => _ = Run(() => CheckinFlow.RunAsync(_api, _adapter));
+        public void OnCheckinClicked() => _ = Run("Checkin", () => CheckinFlow.RunAsync(_api, _adapter));
 
-        public void OnResolveClicked() => _ = Run(() => ResolveFromAtlasFlow.RunAsync(_api, _adapter));
+        public void OnResolveClicked() => _ = Run("Resolve", () => ResolveFromAtlasFlow.RunAsync(_api, _adapter));
 
         public void OnMyCheckoutsClicked()
         {
@@ -155,11 +151,7 @@ namespace AtlasCadPlugin.SolidWorks
                 using (var form = new MyCheckoutsForm(_api)) { form.ShowDialog(); }
             }
             catch (UnauthorizedException) { HandleUnauthorized(); }
-            catch (Exception ex)
-            {
-                MessageBox.Show("My Checkouts failed:\n\n" + ex, "Atlas",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            catch (Exception ex) { AtlasErrorReporter.Show("My Checkouts failed", "OnMyCheckoutsClicked", ex); }
         }
 
         public void OnSignOutClicked()
@@ -172,15 +164,11 @@ namespace AtlasCadPlugin.SolidWorks
             EnsureAuthenticated();
         }
 
-        private async Task Run(Func<Task> work)
+        private async Task Run(string context, Func<Task> work)
         {
             try { await work(); }
             catch (UnauthorizedException) { HandleUnauthorized(); }
-            catch (Exception ex)
-            {
-                MessageBox.Show("Atlas error:\n\n" + ex.Message, "Atlas",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
+            catch (Exception ex) { AtlasErrorReporter.Show(context, context, ex); }
         }
 
         private void HandleUnauthorized()

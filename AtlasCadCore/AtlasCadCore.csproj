@@ -66,6 +66,7 @@
     <Compile Include="Forms\ResolveFromAtlasFlow.cs" />
     <Compile Include="Forms\UploadToPartMasterForm.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Utility\AtlasErrorReporter.cs" />
     <Compile Include="Utility\AutoUpdater.cs" />
     <Compile Include="Utility\CheckoutTracker.cs" />
     <Compile Include="Utility\FileHashStash.cs" />

@@ -2,42 +2,40 @@
 ' Atlas CATIA V5 startup macro.
 '
 ' Drop into %CATCustom%\CATStartup\ (or load via Tools > Macro > Macros).
-' CATIA runs this on startup; it instantiates the .NET add-in and wires
-' five toolbar buttons.
-'
 ' The COM ProgID "AtlasCadPlugin.Catia.CatiaAddin" is set by the
 ' [ClassInterface] attribute on CatiaAddin.cs; regasm.exe writes the
 ' HKCR mapping when the DLL is installed.
 '
+' Until a CAA workbench is built, the macro presents an action menu via
+' InputBox each time it's run — pick an action, the addin runs it,
+' Cancel exits.
+'
 Language="VBSCRIPT"
 
 Dim atlas
-Set atlas = CATIA.SystemService.CreateObject("AtlasCadPlugin.Catia.CatiaAddin")
+Set atlas = CreateObject("AtlasCadPlugin.Catia.CatiaAddin")
 atlas.Initialize(CATIA)
 
-' Hook up a workbench toolbar. CATIA's UI customisation API is involved,
-' so we use a minimal floating toolbar approach: register a custom
-' workbench shortcut that fires each callback.
-'
-' For richer integration (icons in a proper workbench), use the
-' CAA C++ workbench framework — out of scope for v1.
+Dim prompt
+prompt = "Atlas — pick an action:" & vbCrLf & vbCrLf & _
+         "  1 = Ping (test connection)" & vbCrLf & _
+         "  2 = Upload to Atlas" & vbCrLf & _
+         "  3 = Browse Part Master Library" & vbCrLf & _
+         "  4 = Check In" & vbCrLf & _
+         "  5 = Sign Out" & vbCrLf & vbCrLf & _
+         "(Cancel to close)"
 
-Sub OnAtlasPing()
-    atlas.OnPingClicked()
-End Sub
+Do
+    Dim choice
+    choice = InputBox(prompt, "Atlas", "3")
+    If choice = "" Then Exit Do
 
-Sub OnAtlasUpload()
-    atlas.OnUploadClicked()
-End Sub
-
-Sub OnAtlasBrowse()
-    atlas.OnBrowseClicked()
-End Sub
-
-Sub OnAtlasCheckin()
-    atlas.OnCheckinClicked()
-End Sub
-
-Sub OnAtlasSignOut()
-    atlas.OnSignOutClicked()
-End Sub
+    Select Case Trim(choice)
+        Case "1": atlas.OnPingClicked()
+        Case "2": atlas.OnUploadClicked()
+        Case "3": atlas.OnBrowseClicked()
+        Case "4": atlas.OnCheckinClicked()
+        Case "5": atlas.OnSignOutClicked()
+        Case Else: MsgBox "Invalid choice '" & choice & "'. Enter 1-5.", vbExclamation, "Atlas"
+    End Select
+Loop

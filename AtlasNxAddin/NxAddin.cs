@@ -56,7 +56,7 @@ namespace AtlasCadPlugin.Nx
 
         public static MenuButtonEvent OnPingClicked(string buttonName, IntPtr handle)
         {
-            _ = Run(async () =>
+            _ = Run("Ping", async () =>
             {
                 string result = await _api.PingAsync();
                 var who = TokenStore.Current();
@@ -68,7 +68,7 @@ namespace AtlasCadPlugin.Nx
 
         public static MenuButtonEvent OnUploadClicked(string buttonName, IntPtr handle)
         {
-            _ = Run(() => UploadToPartMasterForm.RunAsync(_api, _adapter));
+            _ = Run("Upload", () => UploadToPartMasterForm.RunAsync(_api, _adapter));
             return MenuButtonEvent.Activate;
         }
 
@@ -79,13 +79,13 @@ namespace AtlasCadPlugin.Nx
                 using (var form = new BrowsePartMasterForm(_api, _adapter)) { form.ShowDialog(); }
             }
             catch (UnauthorizedException) { HandleUnauthorized(); }
-            catch (Exception ex) { MessageBox.Show("Browse failed:\n\n" + ex, "Atlas"); }
+            catch (Exception ex) { AtlasErrorReporter.Show("Browse failed", "OnBrowseClicked", ex); }
             return MenuButtonEvent.Activate;
         }
 
         public static MenuButtonEvent OnCheckinClicked(string buttonName, IntPtr handle)
         {
-            _ = Run(() => CheckinFlow.RunAsync(_api, _adapter));
+            _ = Run("Checkin", () => CheckinFlow.RunAsync(_api, _adapter));
             return MenuButtonEvent.Activate;
         }
 
@@ -107,11 +107,11 @@ namespace AtlasCadPlugin.Nx
                 return dlg.ShowDialog() == DialogResult.OK;
         }
 
-        private static async Task Run(Func<Task> work)
+        private static async Task Run(string context, Func<Task> work)
         {
             try { await work(); }
             catch (UnauthorizedException) { HandleUnauthorized(); }
-            catch (Exception ex) { MessageBox.Show("Atlas error:\n\n" + ex.Message, "Atlas"); }
+            catch (Exception ex) { AtlasErrorReporter.Show(context, context, ex); }
         }
 
         private static void HandleUnauthorized()

@@ -59,6 +59,18 @@ copy /Y "%BIN_DIR%\AtlasCadCore.dll" "%INSTALL_DIR%\"
 if errorlevel 1 goto :error
 copy /Y "%BIN_DIR%\Newtonsoft.Json.dll" "%INSTALL_DIR%\"
 if errorlevel 1 goto :error
+REM CATIA Interop assemblies must sit alongside AtlasCatiaAddin.dll so
+REM regasm can load them at COM-registration time, and so CATIA's runtime
+REM can resolve them when the addin actually loads. Without these, regasm
+REM fails with "Could not load file or assembly 'INFITF...'".
+copy /Y "%BIN_DIR%\INFITF.dll" "%INSTALL_DIR%\"
+if errorlevel 1 goto :error
+copy /Y "%BIN_DIR%\MECMOD.dll" "%INSTALL_DIR%\"
+if errorlevel 1 goto :error
+copy /Y "%BIN_DIR%\ProductStructureTypeLib.dll" "%INSTALL_DIR%\"
+if errorlevel 1 goto :error
+copy /Y "%BIN_DIR%\KnowledgewareTypeLib.dll" "%INSTALL_DIR%\"
+if errorlevel 1 goto :error
 
 echo === Registering COM (regasm /codebase) ===
 regasm /codebase "%INSTALL_DIR%\AtlasCatiaAddin.dll"
