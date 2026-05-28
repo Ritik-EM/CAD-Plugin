@@ -187,10 +187,13 @@ namespace AtlasCadPlugin.Catia
         private static string TryGetChildPath(Product child)
         {
             // CATIA exposes the source filepath several ways depending on
-            // whether the referenced doc is loaded:
-            //   - Product.ReferenceProduct.Parent (Document) → FullName
-            //   - Otherwise fall back to Product.get_PartNumber()-style hints
-            //     which don't give us a real path.
+            // whether the referenced doc is loaded. For LOADED docs:
+            //   Product.ReferenceProduct.Parent (Document).FullName
+            // For BROKEN/missing docs (file gone from disk), Parent is null
+            // — in that case we fall back to extracting the filename from
+            // Product.Name or Product.PartNumber so the caller still gets a
+            // useful key (even if it's just "C-282088-1-F-3D.CATPart" with
+            // no directory).
             try
             {
                 Product refProd = child.ReferenceProduct;
@@ -206,6 +209,42 @@ namespace AtlasCadPlugin.Catia
                 }
             }
             catch { }
+
+            return TryGuessFilename(child);
+        }
+
+        /// <summary>
+        /// Best-effort filename inference for a broken/unloaded Product node.
+        /// CATIA's tree typically shows broken children as "InternalID
+        /// [filename.CATPart]" — we extract the bracketed filename when
+        /// present, otherwise treat PartNumber as the basename and append a
+        /// likely extension. Returns a bare filename (no directory) so the
+        /// caller knows to resolve it against the parent assembly's folder.
+        /// </summary>
+        private static string TryGuessFilename(Product child)
+        {
+            try
+            {
+                string name = child.get_Name();
+                if (!string.IsNullOrEmpty(name))
+                {
+                    var m = System.Text.RegularExpressions.Regex.Match(
+                        name,
+                        @"([^\\/\[\]\s]+\.(?:CATPart|CATProduct|stp|step|model))",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (m.Success) return m.Groups[1].Value;
+                }
+            }
+            catch { }
+
+            try
+            {
+                string pn = child.get_PartNumber();
+                if (!string.IsNullOrEmpty(pn))
+                    return pn + ".CATPart"; // best-guess extension
+            }
+            catch { }
+
             return null;
         }
 
@@ -319,13 +358,17 @@ namespace AtlasCadPlugin.Catia
             var productDoc = catDoc as ProductDocument;
             if (productDoc == null) return result;
 
+            string assemblyDir = null;
+            try { assemblyDir = Path.GetDirectoryName(catDoc.FullName); } catch { }
+
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            CollectMissingChildren(productDoc.Product, result, seen);
+            CollectMissingChildren(productDoc.Product, assemblyDir, result, seen);
             return result;
         }
 
         private static void CollectMissingChildren(
-            Product parent, List<MissingComponent> output, HashSet<string> seen)
+            Product parent, string assemblyDir,
+            List<MissingComponent> output, HashSet<string> seen)
         {
             Products children;
             try { children = parent.Products; }
@@ -341,24 +384,32 @@ namespace AtlasCadPlugin.Catia
 
                 string path = TryGetChildPath(child);
                 if (string.IsNullOrEmpty(path)) continue;
-                if (System.IO.File.Exists(path)) continue;     // already resolved on disk
-                if (!seen.Add(path)) continue;                  // dedupe — same .CATPart used multiple times
 
-                string filename = Path.GetFileName(path);
+                // If TryGetChildPath gave us just a filename (no directory),
+                // resolve it against the parent assembly's folder so we can
+                // check existence and pass a real path to ResolveFromAtlasFlow.
+                string fullPath = Path.IsPathRooted(path)
+                    ? path
+                    : (!string.IsNullOrEmpty(assemblyDir) ? Path.Combine(assemblyDir, path) : path);
+
+                if (System.IO.File.Exists(fullPath)) continue;     // already resolved on disk
+                if (!seen.Add(fullPath)) continue;                  // dedupe
+
+                string filename = Path.GetFileName(fullPath);
                 output.Add(new MissingComponent
                 {
                     Filename = filename,
-                    ExpectedPath = path,
+                    ExpectedPath = fullPath,
                     PartNumber = PartNumberParser.ParseOrNull(filename),
                 });
 
                 // Recurse into nested sub-assemblies that are loaded enough
                 // to enumerate, even though their backing file is missing.
-                if (Path.GetExtension(path).Equals(".CATProduct", StringComparison.OrdinalIgnoreCase))
+                if (Path.GetExtension(fullPath).Equals(".CATProduct", StringComparison.OrdinalIgnoreCase))
                 {
                     Product nested = null;
                     try { nested = child.ReferenceProduct; } catch { }
-                    if (nested != null) CollectMissingChildren(nested, output, seen);
+                    if (nested != null) CollectMissingChildren(nested, assemblyDir, output, seen);
                 }
             }
         }
