@@ -69,6 +69,18 @@ namespace AtlasCadPlugin.Catia
 
         public void OnCheckinClicked() => _ = Run("Checkin", () => CheckinFlow.RunAsync(_api, _adapter));
 
+        public void OnResolveClicked() => _ = Run("Resolve", () => ResolveFromAtlasFlow.RunAsync(_api, _adapter));
+
+        public void OnMyCheckoutsClicked()
+        {
+            try
+            {
+                using (var form = new MyCheckoutsForm(_api)) { form.ShowDialog(); }
+            }
+            catch (UnauthorizedException) { HandleUnauthorized(); }
+            catch (Exception ex) { AtlasErrorReporter.Show("My Checkouts failed", "OnMyCheckoutsClicked", ex); }
+        }
+
         public void OnSignOutClicked()
         {
             TokenStore.Clear();

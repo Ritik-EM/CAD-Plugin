@@ -13,6 +13,8 @@ namespace AtlasCadPlugin.Catia
 {
     public class CatiaAdapter : ICadAdapter
     {
+        public const string WalkAssemblyVersion = "2026-05-28-parity-v1";
+
         private readonly Application _catApp;
 
         public CatiaAdapter(Application catApp)
@@ -45,10 +47,9 @@ namespace AtlasCadPlugin.Catia
         public void SaveDocument(CadDocument doc)
         {
             var catDoc = (Document)doc.NativeHandle;
-            // CATIA's Document.Save() throws E_UNEXPECTED (0x8000FFFF) when
-            // there's nothing to save, or when the doc has never been saved
-            // to disk. Skip the call in those cases — Save() is best-effort
-            // here; if the user has unsaved edits CATIA will prompt later.
+            // CATIA throws E_UNEXPECTED if there's nothing to save or the doc
+            // has never been saved to disk. Skip the call in those cases —
+            // Save() is best-effort here.
             try
             {
                 if (catDoc.Saved) return;
@@ -59,7 +60,7 @@ namespace AtlasCadPlugin.Catia
                 return; // never been saved; SaveAs is the user's problem
 
             try { catDoc.Save(); }
-            catch (System.Runtime.InteropServices.COMException) { /* swallow — best-effort */ }
+            catch (System.Runtime.InteropServices.COMException) { /* best-effort */ }
         }
 
         public void OpenDocument(string filePath)
@@ -67,12 +68,24 @@ namespace AtlasCadPlugin.Catia
             _catApp.Documents.Open(filePath);
         }
 
+        // ---- WalkAssembly with skip-reasons + diagnostic log ----
+        // Mirrors SolidWorksAdapter.WalkAssembly's contract: returns one
+        // AssemblyFileRef per node in the tree, including suppressed/broken
+        // ones with a populated SkipReason. The shared upload form filters
+        // those out by `string.IsNullOrEmpty(n.SkipReason)`.
+
         public List<AssemblyFileRef> WalkAssembly(CadDocument doc)
         {
+            LogWalk($"WalkAssembly v={WalkAssemblyVersion} invoked");
+
             var catDoc = (Document)doc.NativeHandle ??
                          throw new InvalidOperationException("No active document");
 
             string rootPath = catDoc.FullName;
+            if (string.IsNullOrEmpty(rootPath))
+                throw new InvalidOperationException(
+                    "Assembly has not been saved to disk yet — save it first");
+
             string ext = Path.GetExtension(rootPath).ToLowerInvariant();
             if (ext != ".catproduct")
                 throw new InvalidOperationException("Active document is not a CATProduct assembly");
@@ -90,6 +103,7 @@ namespace AtlasCadPlugin.Catia
                 IsRoot = true,
                 PartNumber = rootPn,
                 ParentPartNumber = null,
+                NativeHandle = catDoc,
             });
             seenPaths.Add(rootPath);
 
@@ -98,43 +112,111 @@ namespace AtlasCadPlugin.Catia
             return result;
         }
 
+        // Walks Product children without re-opening their backing Documents.
+        // CATIA exposes the on-disk path via Product.ReferenceProduct.Parent
+        // when the doc is already loaded, OR via the child Product's File-
+        // related properties when it isn't. We avoid Documents.Open here to
+        // skip the "Several editors are opened" warning (P7.39) — only fall
+        // back to opening when we genuinely can't read the metadata otherwise.
         private void WalkProductTree(Product parent, string parentPn,
                                       List<AssemblyFileRef> output, HashSet<string> seenPaths)
         {
-            Products children = parent.Products;
+            Products children;
+            try { children = parent.Products; }
+            catch { return; }
+            if (children == null) return;
+
             for (int i = 1; i <= children.Count; i++)
             {
-                Product child = children.Item(i);
-                Document refDoc = null;
-                try { refDoc = (Document)child.ReferenceProduct.Parent; }
+                Product child;
+                try { child = children.Item(i); }
                 catch { continue; }
-                if (refDoc == null) continue;
+                if (child == null) continue;
 
-                string fullPath = refDoc.FullName;
-                if (string.IsNullOrEmpty(fullPath)) continue;
-                // Fully-qualified System.IO.File — `File` alone is ambiguous
-                // between INFITF.File (a CATIA type) and System.IO.File.
-                if (!System.IO.File.Exists(fullPath)) continue;
-                if (!seenPaths.Add(fullPath)) continue;
+                string fullPath = TryGetChildPath(child);
+                string childFilename = string.IsNullOrEmpty(fullPath) ? null : Path.GetFileName(fullPath);
 
-                string childFilename = Path.GetFileName(fullPath);
+                string skipReason = null;
+                bool activated = true;
+                try { activated = child.IsActivated; } catch { }
+                if (!activated) skipReason = "suppressed";
+                else if (string.IsNullOrEmpty(fullPath)) skipReason = "no-path";
+                else if (!System.IO.File.Exists(fullPath)) skipReason = "missing-file";
+
+                if (skipReason == null && !seenPaths.Add(fullPath))
+                    continue;
+
+                // Resolve part_number from the reference Document if it's
+                // already loaded; don't force-open just to read it.
+                Document refDoc = TryGetLoadedReferenceDoc(child);
                 string childPn = ResolvePartNumber(refDoc, childFilename);
+                if (skipReason == null && string.IsNullOrEmpty(childPn))
+                    skipReason = "no-part-number";
+
+                string displayName = childFilename;
+                if (string.IsNullOrEmpty(displayName))
+                {
+                    try { displayName = child.get_Name(); } catch { }
+                    if (string.IsNullOrEmpty(displayName)) displayName = "(unnamed component)";
+                }
+
                 output.Add(new AssemblyFileRef
                 {
                     FullPath = fullPath,
-                    RelativePath = childFilename,
-                    Filename = childFilename,
+                    RelativePath = displayName,
+                    Filename = displayName,
                     IsRoot = false,
                     PartNumber = childPn,
                     ParentPartNumber = parentPn,
+                    NativeHandle = refDoc,
+                    SkipReason = skipReason,
                 });
 
-                if (Path.GetExtension(fullPath).Equals(".CATProduct", StringComparison.OrdinalIgnoreCase))
+                if (skipReason == null
+                    && !string.IsNullOrEmpty(fullPath)
+                    && Path.GetExtension(fullPath).Equals(".CATProduct", StringComparison.OrdinalIgnoreCase))
                 {
-                    Product nested = child.ReferenceProduct;
+                    Product nested = null;
+                    try { nested = child.ReferenceProduct; } catch { }
                     if (nested != null) WalkProductTree(nested, childPn, output, seenPaths);
                 }
             }
+        }
+
+        private static string TryGetChildPath(Product child)
+        {
+            // CATIA exposes the source filepath several ways depending on
+            // whether the referenced doc is loaded:
+            //   - Product.ReferenceProduct.Parent (Document) → FullName
+            //   - Otherwise fall back to Product.get_PartNumber()-style hints
+            //     which don't give us a real path.
+            try
+            {
+                Product refProd = child.ReferenceProduct;
+                if (refProd != null)
+                {
+                    object parentObj = refProd.Parent;
+                    Document parentDoc = parentObj as Document;
+                    if (parentDoc != null)
+                    {
+                        string full = parentDoc.FullName;
+                        if (!string.IsNullOrEmpty(full)) return full;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static Document TryGetLoadedReferenceDoc(Product child)
+        {
+            try
+            {
+                Product refProd = child.ReferenceProduct;
+                if (refProd == null) return null;
+                return refProd.Parent as Document;
+            }
+            catch { return null; }
         }
 
         public List<AssemblyFileRef> ExportStep(
@@ -157,9 +239,13 @@ namespace AtlasCadPlugin.Catia
                 string stepName = Path.GetFileNameWithoutExtension(f.Filename) + ".stp";
                 string stepPath = Path.Combine(stagingDir, stepName);
 
-                Document srcDoc;
-                try { srcDoc = _catApp.Documents.Open(f.FullPath); }
-                catch { continue; }
+                Document srcDoc = f.NativeHandle as Document;
+                bool opened = false;
+                if (srcDoc == null)
+                {
+                    try { srcDoc = _catApp.Documents.Open(f.FullPath); opened = srcDoc != null; }
+                    catch { continue; }
+                }
                 if (srcDoc == null) continue;
 
                 try
@@ -167,6 +253,10 @@ namespace AtlasCadPlugin.Catia
                     srcDoc.ExportData(stepPath, "stp");
                 }
                 catch { continue; }
+                finally
+                {
+                    if (opened) { try { srcDoc.Close(); } catch { } }
+                }
 
                 if (!System.IO.File.Exists(stepPath)) continue;
 
@@ -175,7 +265,7 @@ namespace AtlasCadPlugin.Catia
                     FullPath = stepPath,
                     Filename = stepName,
                     RelativePath = stepName,
-                    IsRoot = false,
+                    IsRoot = f.IsRoot,
                     PartNumber = f.PartNumber,
                 });
             }
@@ -197,7 +287,6 @@ namespace AtlasCadPlugin.Catia
 
             // R21 generates Document.Name as get_Name()/set_Name(ref string)
             // — newer CATIA versions wrap it as a clean property accessor.
-            // Use the explicit accessor so the build works on either.
             string actualName = imported.get_Name();
             string outPath = Path.Combine(
                 Path.GetDirectoryName(nativeOutPathHint),
@@ -216,18 +305,132 @@ namespace AtlasCadPlugin.Catia
             return outPath;
         }
 
+        // ---- FindMissingComponents: drives "Resolve from Atlas" (P7.18) ----
+        // Walks the product tree and returns any child whose recorded path
+        // doesn't exist on disk. The shared ResolveFromAtlasFlow uses these
+        // to fetch native files from atlas and place them where CATIA expects.
         public List<MissingComponent> FindMissingComponents(CadDocument assembly)
         {
-            // TODO: CATIA-specific implementation. CATIA's product structure
-            // exposes broken children via Product.HasAReferenceProduct or
-            // similar; left as a no-op until needed for the CATIA pilot.
-            return new List<MissingComponent>();
+            var result = new List<MissingComponent>();
+            var catDoc = assembly?.NativeHandle as Document;
+            if (catDoc == null) return result;
+
+            var productDoc = catDoc as ProductDocument;
+            if (productDoc == null) return result;
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            CollectMissingChildren(productDoc.Product, result, seen);
+            return result;
         }
 
+        private static void CollectMissingChildren(
+            Product parent, List<MissingComponent> output, HashSet<string> seen)
+        {
+            Products children;
+            try { children = parent.Products; }
+            catch { return; }
+            if (children == null) return;
+
+            for (int i = 1; i <= children.Count; i++)
+            {
+                Product child;
+                try { child = children.Item(i); }
+                catch { continue; }
+                if (child == null) continue;
+
+                string path = TryGetChildPath(child);
+                if (string.IsNullOrEmpty(path)) continue;
+                if (System.IO.File.Exists(path)) continue;     // already resolved on disk
+                if (!seen.Add(path)) continue;                  // dedupe — same .CATPart used multiple times
+
+                string filename = Path.GetFileName(path);
+                output.Add(new MissingComponent
+                {
+                    Filename = filename,
+                    ExpectedPath = path,
+                    PartNumber = PartNumberParser.ParseOrNull(filename),
+                });
+
+                // Recurse into nested sub-assemblies that are loaded enough
+                // to enumerate, even though their backing file is missing.
+                if (Path.GetExtension(path).Equals(".CATProduct", StringComparison.OrdinalIgnoreCase))
+                {
+                    Product nested = null;
+                    try { nested = child.ReferenceProduct; } catch { }
+                    if (nested != null) CollectMissingChildren(nested, output, seen);
+                }
+            }
+        }
+
+        // ---- AddSearchFolder: tell CATIA where to look for referenced docs ----
+        // CATIA's "Linked Documents Localization" setting takes a semicolon-
+        // separated list of folders, exposed through the
+        // SettingControllers infrastructure (`CATReffilesSettingCtrl`). We
+        // append `folderPath` to whatever's already there.
         public void AddSearchFolder(string folderPath)
         {
-            // TODO: CATIA uses CATIA_INSTALL_PATH-style env vars or the
-            // 'Linked Documents Localization' setting in Tools → Options.
+            if (string.IsNullOrEmpty(folderPath)) return;
+            try
+            {
+                var setting = _catApp.SettingControllers.Item("CATReffilesSettingCtrl");
+                if (setting == null) return;
+
+                // CATReffilesSettingCtrl exposes a string property
+                // "LinkedDocumentsLocalization" (or analog) — names differ
+                // across CATIA releases. We probe the common ones.
+                string existing = TryReadSetting(setting, "LinkedDocumentsLocalization")
+                                 ?? TryReadSetting(setting, "Folders")
+                                 ?? "";
+
+                foreach (string p in existing.Split(';'))
+                {
+                    if (string.Equals(p?.Trim().TrimEnd('\\'), folderPath.TrimEnd('\\'),
+                                      StringComparison.OrdinalIgnoreCase))
+                        return; // already registered
+                }
+
+                string updated = string.IsNullOrEmpty(existing)
+                    ? folderPath
+                    : existing + ";" + folderPath;
+
+                if (!TryWriteSetting(setting, "LinkedDocumentsLocalization", updated))
+                    TryWriteSetting(setting, "Folders", updated);
+
+                try { setting.SaveRepository(); } catch { }
+            }
+            catch
+            {
+                // Setting controller unavailable on some CATIA editions —
+                // shared code will still download files; CATIA just won't
+                // auto-resolve them on the next open without a manual
+                // Tools → Options entry.
+            }
+        }
+
+        private static string TryReadSetting(SettingController setting, string property)
+        {
+            try
+            {
+                object val = setting.GetType()
+                    .InvokeMember(property,
+                        System.Reflection.BindingFlags.GetProperty,
+                        null, setting, null);
+                return val as string;
+            }
+            catch { return null; }
+        }
+
+        private static bool TryWriteSetting(SettingController setting, string property, string value)
+        {
+            try
+            {
+                setting.GetType()
+                    .InvokeMember(property,
+                        System.Reflection.BindingFlags.SetProperty,
+                        null, setting, new object[] { value });
+                return true;
+            }
+            catch { return false; }
         }
 
         public void ReloadActiveDocument()
@@ -239,7 +442,7 @@ namespace AtlasCadPlugin.Catia
             try { _catApp.Documents.Open(path); } catch { }
         }
 
-        // ---- CATIA-specific helpers ----
+        // ---- helpers ----
 
         private static string ResolvePartNumber(Document doc, string filename)
         {
@@ -274,6 +477,21 @@ namespace AtlasCadPlugin.Catia
             {
                 return null;
             }
+        }
+
+        private static void LogWalk(string line)
+        {
+            try
+            {
+                string logDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "AtlasCad");
+                Directory.CreateDirectory(logDir);
+                System.IO.File.AppendAllText(
+                    Path.Combine(logDir, "walk_assembly.log"),
+                    $"--- {DateTime.Now:O} CatiaAdapter.{line}\n");
+            }
+            catch { }
         }
     }
 }
