@@ -33,6 +33,25 @@ namespace AtlasCadCore.Forms
                     List<AssemblyFileRef> native;
                     if (doc.IsAssembly)
                     {
+                        // Pre-flight: if the assembly references children that
+                        // aren't on disk, fork into ResolveFromAtlasFlow so the
+                        // user can attach them (Browse local OR Pick from Atlas)
+                        // before we walk. Otherwise the walk silently drops
+                        // them as SkipReason=missing-file.
+                        var missing = adapter.FindMissingComponents(doc) ?? new List<MissingComponent>();
+                        if (missing.Count > 0)
+                        {
+                            progress.Hide();
+                            var resolveProceed = MessageBox.Show(
+                                $"This assembly references {missing.Count} child file(s) that aren't on disk. " +
+                                "Resolve them from Atlas first so they're included in the upload?",
+                                "Atlas — Missing Children",
+                                MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                            if (resolveProceed == DialogResult.Yes)
+                                await ResolveFromAtlasFlow.RunAsync(api, adapter, doc, silentIfNothingMissing: true);
+                            progress.Show();
+                        }
+
                         progress.SetPhase("Walking assembly tree…");
                         native = adapter.WalkAssembly(doc) ?? new List<AssemblyFileRef>();
                         native = native.Where(n => string.IsNullOrEmpty(n.SkipReason)).ToList();

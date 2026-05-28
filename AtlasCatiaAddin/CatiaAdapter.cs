@@ -136,11 +136,12 @@ namespace AtlasCadPlugin.Catia
                 string fullPath = TryGetChildPath(child);
                 string childFilename = string.IsNullOrEmpty(fullPath) ? null : Path.GetFileName(fullPath);
 
+                // V5R21 doesn't expose Product.IsActivated, so we can't
+                // explicitly tag suppressed children. They show up as
+                // "no-path" or "missing-file" instead, which is fine for the
+                // upload form's filter.
                 string skipReason = null;
-                bool activated = true;
-                try { activated = child.IsActivated; } catch { }
-                if (!activated) skipReason = "suppressed";
-                else if (string.IsNullOrEmpty(fullPath)) skipReason = "no-path";
+                if (string.IsNullOrEmpty(fullPath)) skipReason = "no-path";
                 else if (!System.IO.File.Exists(fullPath)) skipReason = "missing-file";
 
                 if (skipReason == null && !seenPaths.Add(fullPath))

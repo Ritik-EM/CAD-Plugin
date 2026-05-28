@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using AtlasCadCore.Adapter;
+using AtlasCadCore.ApiClient;
 
 namespace AtlasCadCore.Forms
 {
@@ -12,11 +13,15 @@ namespace AtlasCadCore.Forms
     {
         public class Row
         {
-            public string PartNumber;       // parsed from filename
-            public string OriginalFilename; // what SW was looking for
-            public string LocalPath;        // user-chosen local file (.sldprt / .sldasm)
+            public string PartNumber;        // parsed from filename
+            public string OriginalFilename;  // what CAD was looking for
+            public string LocalPath;         // user-chosen local file (.sldprt / .sldasm / .CATPart)
+            // OR (mutually exclusive with LocalPath):
+            public string AtlasPartNumber;   // user-picked existing atlas part_number
+            public string AtlasDescription;  // for display only
         }
 
+        private readonly AtlasApiClient _api;
         private readonly List<Row> _rows;
         private DataGridView _grid;
         private CheckBox _releaseRevisionCheck;
@@ -30,14 +35,16 @@ namespace AtlasCadCore.Forms
 
         public event Action SendOtpRequested;
 
-        public MissingChildUploadForm(List<MissingComponent> missing)
+        public MissingChildUploadForm(List<MissingComponent> missing, AtlasApiClient api = null)
         {
+            _api = api;
             _rows = (missing ?? new List<MissingComponent>())
                 .Select(m => new Row
                 {
                     PartNumber = m.PartNumber ?? "(unknown)",
                     OriginalFilename = m.Filename,
                     LocalPath = null,
+                    AtlasPartNumber = null,
                 })
                 .ToList();
             BuildUi();
@@ -46,17 +53,18 @@ namespace AtlasCadCore.Forms
 
         private void BuildUi()
         {
-            Text = "Atlas — Upload Missing Parts";
-            Size = new Size(960, 560);
+            Text = "Atlas — Resolve Missing Children";
+            Size = new Size(1080, 580);
             StartPosition = FormStartPosition.CenterParent;
-            MinimumSize = new Size(760, 380);
+            MinimumSize = new Size(900, 400);
 
             var hdr = new Label
             {
                 Dock = DockStyle.Fill, Padding = new Padding(10, 8, 10, 0),
-                Text = $"{_rows.Count} child part(s) couldn't be downloaded from atlas (no native file " +
-                       "available). For each one, click Browse… to attach the local .sldprt/.sldasm. " +
-                       "Leave a row blank to skip that part.",
+                Text = $"{_rows.Count} child part(s) couldn't be auto-resolved from atlas. " +
+                       "For each row, either Browse a local file (will be uploaded), or " +
+                       "Pick from Atlas (downloads the file from an existing atlas part_number). " +
+                       "Leave a row blank to skip.",
             };
 
             _grid = new DataGridView
@@ -75,32 +83,18 @@ namespace AtlasCadCore.Forms
             };
             _grid.RowTemplate.Height = 28;
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Part Number", Name = "pn", Width = 140, ReadOnly = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename (expected by SW)", Name = "filename", Width = 280, ReadOnly = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Picked local file", Name = "local", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
-            var btnCol = new DataGridViewButtonColumn { HeaderText = "", Name = "browse", Text = "Browse…", UseColumnTextForButtonValue = true, Width = 90 };
-            _grid.Columns.Add(btnCol);
-            _grid.CellContentClick += (s, e) =>
-            {
-                if (e.RowIndex < 0) return;
-                if (_grid.Columns[e.ColumnIndex].Name != "browse") return;
-                using (var ofd = new OpenFileDialog
-                {
-                    Title = "Pick local file for " + _rows[e.RowIndex].PartNumber,
-                    Filter = "Native CAD|*.sldprt;*.sldasm|All files|*.*",
-                    CheckFileExists = true,
-                })
-                {
-                    if (ofd.ShowDialog() != DialogResult.OK) return;
-                    _rows[e.RowIndex].LocalPath = ofd.FileName;
-                    _grid.Rows[e.RowIndex].Cells["local"].Value = Path.GetFileName(ofd.FileName);
-                }
-            };
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename (expected)", Name = "filename", Width = 240, ReadOnly = true });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Resolution", Name = "picked", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
+            _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "browse", Text = "Browse Local…", UseColumnTextForButtonValue = true, Width = 110 });
+            _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "atlas", Text = "Pick from Atlas…", UseColumnTextForButtonValue = true, Width = 130 });
+            _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "clear", Text = "Clear", UseColumnTextForButtonValue = true, Width = 60 });
+            _grid.CellContentClick += OnGridButtonClick;
 
             var bottom = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10) };
 
             _releaseRevisionCheck = new CheckBox
             {
-                Text = "Release as new revision (requires OTP)",
+                Text = "Release as new revision (requires OTP — applies to Browse Local uploads only)",
                 Location = new Point(10, 8),
                 AutoSize = true,
                 Checked = false,
@@ -111,9 +105,7 @@ namespace AtlasCadCore.Forms
             bottom.Controls.Add(new Label { Text = "OTP:", Location = new Point(10, 38), AutoSize = true });
             _otpBox = new TextBox
             {
-                Location = new Point(50, 35),
-                Width = 120,
-                MaxLength = 6,
+                Location = new Point(50, 35), Width = 120, MaxLength = 6,
                 Font = new Font(FontFamily.GenericMonospace, 11),
             };
             bottom.Controls.Add(_otpBox);
@@ -122,18 +114,16 @@ namespace AtlasCadCore.Forms
             bottom.Controls.Add(_sendOtpBtn);
             _otpHint = new Label
             {
-                Location = new Point(290, 38),
-                AutoSize = true,
-                ForeColor = Color.DimGray,
+                Location = new Point(290, 38), AutoSize = true, ForeColor = Color.DimGray,
                 Text = "(only required if releasing a new revision)",
             };
             bottom.Controls.Add(_otpHint);
 
-            var ok = new Button { Text = "Upload & Continue", Location = new Point(bottom.Width - 290, 88), Width = 160, Height = 28, Anchor = AnchorStyles.Top | AnchorStyles.Right, DialogResult = DialogResult.None };
+            var ok = new Button { Text = "Continue", Size = new Size(120, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right, DialogResult = DialogResult.None };
             ok.Click += (s, e) =>
             {
                 ReleaseNewRevision = _releaseRevisionCheck.Checked;
-                if (ReleaseNewRevision)
+                if (ReleaseNewRevision && _rows.Any(r => !string.IsNullOrEmpty(r.LocalPath)))
                 {
                     string otp = (_otpBox.Text ?? "").Trim();
                     if (otp.Length != 6 || !otp.All(char.IsDigit))
@@ -145,34 +135,87 @@ namespace AtlasCadCore.Forms
                     }
                     Otp = otp;
                 }
-                Result = _rows.Where(r => !string.IsNullOrEmpty(r.LocalPath)).ToList();
+                Result = _rows.Where(r => !string.IsNullOrEmpty(r.LocalPath)
+                                       || !string.IsNullOrEmpty(r.AtlasPartNumber)).ToList();
                 DialogResult = DialogResult.OK;
                 Close();
             };
+            var cancel = new Button { Text = "Skip All", Size = new Size(100, 30), Anchor = AnchorStyles.Top | AnchorStyles.Right, DialogResult = DialogResult.Cancel };
+            bottom.Resize += (s, e) =>
+            {
+                ok.Location = new Point(bottom.Width - ok.Width - 10, 88);
+                cancel.Location = new Point(ok.Left - cancel.Width - 8, 88);
+            };
             bottom.Controls.Add(ok);
-
-            var cancel = new Button { Text = "Skip uploads", Location = new Point(bottom.Width - 120, 88), Width = 100, Height = 28, Anchor = AnchorStyles.Top | AnchorStyles.Right, DialogResult = DialogResult.Cancel };
             bottom.Controls.Add(cancel);
 
             AcceptButton = ok;
             CancelButton = cancel;
 
-            var outer = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 3,
-            };
+            var outer = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3 };
             outer.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
-            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 56f));    // header label
-            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));    // grid
-            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 140f));   // bottom panel (OTP + buttons)
-            outer.Controls.Add(hdr,    0, 0);
-            outer.Controls.Add(_grid,  0, 1);
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 56f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
+            outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 140f));
+            outer.Controls.Add(hdr, 0, 0);
+            outer.Controls.Add(_grid, 0, 1);
             outer.Controls.Add(bottom, 0, 2);
             Controls.Add(outer);
 
             UpdateOtpUi();
+        }
+
+        private void OnGridButtonClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex < 0) return;
+            var colName = _grid.Columns[e.ColumnIndex].Name;
+            var row = _rows[e.RowIndex];
+
+            if (colName == "browse")
+            {
+                using (var ofd = new OpenFileDialog
+                {
+                    Title = "Pick local file for " + row.PartNumber,
+                    Filter = "Native CAD|*.sldprt;*.sldasm;*.CATPart;*.CATProduct|All files|*.*",
+                    CheckFileExists = true,
+                })
+                {
+                    if (ofd.ShowDialog() != DialogResult.OK) return;
+                    row.LocalPath = ofd.FileName;
+                    row.AtlasPartNumber = null;
+                    row.AtlasDescription = null;
+                    _grid.Rows[e.RowIndex].Cells["picked"].Value =
+                        "local: " + Path.GetFileName(ofd.FileName);
+                }
+            }
+            else if (colName == "atlas")
+            {
+                if (_api == null)
+                {
+                    MessageBox.Show("Atlas API client unavailable in this context.", "Atlas",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+                using (var dlg = new PartMasterPickerDialog(_api, initialSearch: row.PartNumber))
+                {
+                    if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                    if (string.IsNullOrEmpty(dlg.SelectedPartNumber)) return;
+                    row.AtlasPartNumber = dlg.SelectedPartNumber;
+                    row.AtlasDescription = dlg.SelectedDescription;
+                    row.LocalPath = null;
+                    _grid.Rows[e.RowIndex].Cells["picked"].Value =
+                        string.IsNullOrEmpty(row.AtlasDescription)
+                            ? "atlas: " + row.AtlasPartNumber
+                            : $"atlas: {row.AtlasPartNumber}  —  {row.AtlasDescription}";
+                }
+            }
+            else if (colName == "clear")
+            {
+                row.LocalPath = null;
+                row.AtlasPartNumber = null;
+                row.AtlasDescription = null;
+                _grid.Rows[e.RowIndex].Cells["picked"].Value = "";
+            }
         }
 
         private void UpdateOtpUi()
@@ -188,15 +231,10 @@ namespace AtlasCadCore.Forms
         private void Populate()
         {
             foreach (var r in _rows)
-            {
-                _grid.Rows.Add(r.PartNumber, r.OriginalFilename, "", null);
-            }
+                _grid.Rows.Add(r.PartNumber, r.OriginalFilename, "", null, null, null);
             _grid.PerformLayout();
             _grid.Refresh();
-            if (_grid.Rows.Count > 0)
-            {
-                _grid.CurrentCell = _grid.Rows[0].Cells["pn"];
-            }
+            if (_grid.Rows.Count > 0) _grid.CurrentCell = _grid.Rows[0].Cells["pn"];
         }
     }
 }

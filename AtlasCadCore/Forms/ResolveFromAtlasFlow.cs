@@ -113,10 +113,13 @@ namespace AtlasCadCore.Forms
             }
 
             int uploadedFromLocal = 0;
+            int attachedFromAtlas = 0;
             if (unresolved.Count > 0)
             {
-                uploadedFromLocal = await PromptAndUploadAsync(api, unresolved, resolveDir);
+                (uploadedFromLocal, attachedFromAtlas) =
+                    await PromptAndResolveAsync(api, adapter, unresolved, resolveDir);
             }
+            resolvedFromAtlas += attachedFromAtlas;
 
             if (resolvedFromAtlas > 0 || uploadedFromLocal > 0)
             {
@@ -146,10 +149,11 @@ namespace AtlasCadCore.Forms
             }
         }
 
-        private static async Task<int> PromptAndUploadAsync(
-            AtlasApiClient api, List<MissingComponent> unresolved, string resolveDir)
+        private static async Task<(int uploadedFromLocal, int attachedFromAtlas)> PromptAndResolveAsync(
+            AtlasApiClient api, ICadAdapter adapter,
+            List<MissingComponent> unresolved, string resolveDir)
         {
-            using (var dlg = new MissingChildUploadForm(unresolved))
+            using (var dlg = new MissingChildUploadForm(unresolved, api))
             {
                 dlg.SendOtpRequested += async () =>
                 {
@@ -161,42 +165,78 @@ namespace AtlasCadCore.Forms
                     }
                 };
 
-                if (dlg.ShowDialog() != DialogResult.OK) return 0;
+                if (dlg.ShowDialog() != DialogResult.OK) return (0, 0);
 
                 var picked = dlg.Result ?? new List<MissingChildUploadForm.Row>();
-                if (picked.Count == 0) return 0;
+                if (picked.Count == 0) return (0, 0);
 
-                var tree = picked.Select(r => (object)new
-                {
-                    part_number = r.PartNumber,
-                    filename = Path.GetFileName(r.LocalPath),
-                    step_filename = (string)null,
-                    detected_description = (string)null,
-                }).ToList();
-                var paths = picked.Select(r => r.LocalPath).ToList();
+                // Two buckets per row: local-file-to-upload vs atlas-pn-to-download.
+                var localRows = picked.Where(r => !string.IsNullOrEmpty(r.LocalPath)).ToList();
+                var atlasRows = picked.Where(r => !string.IsNullOrEmpty(r.AtlasPartNumber)).ToList();
 
                 int uploaded = 0;
-                try
+                if (localRows.Count > 0)
                 {
-                    var result = await api.UploadPartMasterAsync(
-                        tree, paths,
-                        releaseNewRevision: dlg.ReleaseNewRevision,
-                        otp: dlg.Otp);
-                    uploaded = result?.attached?.Count ?? 0;
-
-                    foreach (var r in picked)
+                    var tree = localRows.Select(r => (object)new
                     {
-                        string targetPath = Path.Combine(resolveDir, r.OriginalFilename);
-                        try { File.Copy(r.LocalPath, targetPath, overwrite: true); } catch { }
+                        part_number = r.PartNumber,
+                        filename = Path.GetFileName(r.LocalPath),
+                        step_filename = (string)null,
+                        detected_description = (string)null,
+                    }).ToList();
+                    var paths = localRows.Select(r => r.LocalPath).ToList();
+                    try
+                    {
+                        var result = await api.UploadPartMasterAsync(
+                            tree, paths,
+                            releaseNewRevision: dlg.ReleaseNewRevision,
+                            otp: dlg.Otp);
+                        uploaded = result?.attached?.Count ?? 0;
+                        foreach (var r in localRows)
+                        {
+                            string targetPath = Path.Combine(resolveDir, r.OriginalFilename);
+                            try { File.Copy(r.LocalPath, targetPath, overwrite: true); } catch { }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show("Upload failed:\n\n" + ex.Message,
+                            "Atlas — Resolve from Atlas",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
                     }
                 }
-                catch (Exception ex)
+
+                int attachedFromAtlas = 0;
+                foreach (var r in atlasRows)
                 {
-                    MessageBox.Show("Upload failed:\n\n" + ex.Message,
-                        "Atlas — Resolve from Atlas",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    var found = await TryResolveFromAtlasAsync(api, r.AtlasPartNumber);
+                    if (found == null) continue;
+                    try
+                    {
+                        string url = await api.GetS3DownloadUrlAsync(found.Value.S3Key);
+                        string targetPath = Path.Combine(resolveDir, r.OriginalFilename);
+                        if (found.Value.IsStep)
+                        {
+                            string stepTemp = Path.Combine(resolveDir,
+                                "_step_" + Path.GetFileName(found.Value.S3Key));
+                            await api.DownloadFileAsync(url, stepTemp);
+                            string converted = adapter.ImportStepAsNative(stepTemp, targetPath);
+                            if (!string.Equals(converted, targetPath, StringComparison.OrdinalIgnoreCase)
+                                && File.Exists(converted))
+                            {
+                                try { File.Copy(converted, targetPath, overwrite: true); } catch { }
+                            }
+                        }
+                        else
+                        {
+                            await api.DownloadFileAsync(url, targetPath);
+                        }
+                        attachedFromAtlas++;
+                    }
+                    catch { /* row stays unresolved; surfaced in summary */ }
                 }
-                return uploaded;
+
+                return (uploaded, attachedFromAtlas);
             }
         }
 
