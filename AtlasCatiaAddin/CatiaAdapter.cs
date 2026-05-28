@@ -353,17 +353,79 @@ namespace AtlasCadPlugin.Catia
         {
             var result = new List<MissingComponent>();
             var catDoc = assembly?.NativeHandle as Document;
-            if (catDoc == null) return result;
-
-            var productDoc = catDoc as ProductDocument;
-            if (productDoc == null) return result;
+            if (catDoc == null) { LogResolve("FindMissingComponents: catDoc is null"); return result; }
 
             string assemblyDir = null;
             try { assemblyDir = Path.GetDirectoryName(catDoc.FullName); } catch { }
+            LogResolve($"FindMissingComponents: assemblyDir={assemblyDir}");
 
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            CollectMissingChildren(productDoc.Product, assemblyDir, result, seen);
+
+            // Strategy 1: walk the Product tree (works when child refs are
+            // exposed via Product.ReferenceProduct.Parent or via inferred
+            // filenames in Product.Name).
+            var productDoc = catDoc as ProductDocument;
+            if (productDoc != null)
+            {
+                CollectMissingChildren(productDoc.Product, assemblyDir, result, seen);
+                LogResolve($"After Product tree walk: {result.Count} missing detected");
+            }
+
+            // Strategy 2: scan _catApp.Documents — V5R21 often creates a
+            // Document entry with FullName set to the recorded path even
+            // when the file failed to load. Anything in there whose path
+            // is non-existent on disk is a missing ref we should resolve.
+            try
+            {
+                int total = _catApp.Documents.Count;
+                LogResolve($"_catApp.Documents.Count = {total}");
+                for (int i = 1; i <= total; i++)
+                {
+                    Document doc;
+                    try { doc = _catApp.Documents.Item(i); }
+                    catch (Exception ex) { LogResolve($"  Documents[{i}] threw {ex.Message}"); continue; }
+                    if (doc == null) continue;
+
+                    string full = null;
+                    string nm = null;
+                    try { full = doc.FullName; } catch { }
+                    try { nm = doc.get_Name(); } catch { }
+                    LogResolve($"  Documents[{i}]: Name={nm} FullName={full}");
+
+                    if (string.IsNullOrEmpty(full)) continue;
+                    if (System.IO.File.Exists(full)) continue;
+                    if (string.Equals(full, catDoc.FullName, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!seen.Add(full)) continue;
+
+                    string filename = Path.GetFileName(full);
+                    result.Add(new MissingComponent
+                    {
+                        Filename = filename,
+                        ExpectedPath = full,
+                        PartNumber = PartNumberParser.ParseOrNull(filename),
+                    });
+                    LogResolve($"  -> added as missing: {filename}");
+                }
+            }
+            catch (Exception ex) { LogResolve($"Documents scan threw: {ex.Message}"); }
+
+            LogResolve($"FindMissingComponents result: {result.Count} entries");
             return result;
+        }
+
+        private static void LogResolve(string line)
+        {
+            try
+            {
+                string logDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "AtlasCad");
+                Directory.CreateDirectory(logDir);
+                System.IO.File.AppendAllText(
+                    Path.Combine(logDir, "walk_assembly.log"),
+                    $"--- {DateTime.Now:O} {line}\n");
+            }
+            catch { }
         }
 
         private static void CollectMissingChildren(
@@ -372,17 +434,42 @@ namespace AtlasCadPlugin.Catia
         {
             Products children;
             try { children = parent.Products; }
-            catch { return; }
-            if (children == null) return;
+            catch (Exception ex) { LogResolve($"  parent.Products threw: {ex.Message}"); return; }
+            if (children == null) { LogResolve("  parent.Products = null"); return; }
 
-            for (int i = 1; i <= children.Count; i++)
+            int count = 0;
+            try { count = children.Count; } catch (Exception ex) { LogResolve($"  children.Count threw: {ex.Message}"); }
+            LogResolve($"  children.Count = {count}");
+
+            for (int i = 1; i <= count; i++)
             {
                 Product child;
                 try { child = children.Item(i); }
-                catch { continue; }
-                if (child == null) continue;
+                catch (Exception ex) { LogResolve($"  children.Item({i}) threw: {ex.Message}"); continue; }
+                if (child == null) { LogResolve($"  children.Item({i}) = null"); continue; }
+
+                string cName = null, cPn = null, cDesc = null, cNom = null;
+                try { cName = child.get_Name(); } catch { }
+                try { cPn = child.get_PartNumber(); } catch { }
+                try { cDesc = child.get_DescriptionInst(); } catch { }
+                try { cNom = child.get_Nomenclature(); } catch { }
+                LogResolve($"  child[{i}]: Name='{cName}' PN='{cPn}' DescInst='{cDesc}' Nomenclature='{cNom}'");
+
+                Product refProd = null;
+                try { refProd = child.ReferenceProduct; } catch (Exception ex) { LogResolve($"    .ReferenceProduct threw: {ex.Message}"); }
+                if (refProd != null)
+                {
+                    string rpName = null;
+                    try { rpName = refProd.get_Name(); } catch { }
+                    Document rpParent = null;
+                    try { rpParent = refProd.Parent as Document; } catch (Exception ex) { LogResolve($"    .ReferenceProduct.Parent threw: {ex.Message}"); }
+                    string rpFull = null;
+                    try { rpFull = rpParent?.FullName; } catch { }
+                    LogResolve($"    ReferenceProduct.Name='{rpName}' Parent.FullName='{rpFull}'");
+                }
 
                 string path = TryGetChildPath(child);
+                LogResolve($"    TryGetChildPath -> '{path}'");
                 if (string.IsNullOrEmpty(path)) continue;
 
                 // If TryGetChildPath gave us just a filename (no directory),
