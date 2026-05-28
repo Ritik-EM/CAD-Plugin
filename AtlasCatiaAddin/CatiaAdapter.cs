@@ -45,7 +45,21 @@ namespace AtlasCadPlugin.Catia
         public void SaveDocument(CadDocument doc)
         {
             var catDoc = (Document)doc.NativeHandle;
-            catDoc.Save();
+            // CATIA's Document.Save() throws E_UNEXPECTED (0x8000FFFF) when
+            // there's nothing to save, or when the doc has never been saved
+            // to disk. Skip the call in those cases — Save() is best-effort
+            // here; if the user has unsaved edits CATIA will prompt later.
+            try
+            {
+                if (catDoc.Saved) return;
+            }
+            catch { /* Saved unsupported on some doc types — fall through */ }
+
+            if (string.IsNullOrEmpty(catDoc.FullName))
+                return; // never been saved; SaveAs is the user's problem
+
+            try { catDoc.Save(); }
+            catch (System.Runtime.InteropServices.COMException) { /* swallow — best-effort */ }
         }
 
         public void OpenDocument(string filePath)

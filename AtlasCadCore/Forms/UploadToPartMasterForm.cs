@@ -104,15 +104,19 @@ namespace AtlasCadCore.Forms
                     {
                         progress.Hide();
                         var pickedExistingRemap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                        foreach (var m in stillMissing)
+                        using (var dlg = new MissingPartsTableForm(api, stillMissing))
                         {
-                            using (var dlg = new MissingPartChoiceForm(m.part_number, m.filename, api))
+                            dlg.ShowDialog();
+                            // Either OK (Continue) or Cancel (Skip All) — we honour
+                            // each row's PickedPartNumber regardless; rows without a
+                            // pick are treated as "skip".
+                            foreach (var m in stillMissing)
                             {
-                                dlg.ShowDialog();
-                                if (dlg.Choice == MissingPartChoiceForm.ChoiceKind.UseExisting
-                                    && !string.IsNullOrEmpty(dlg.PickedExistingPartNumber))
+                                var row = dlg.Rows.FirstOrDefault(r =>
+                                    string.Equals(r.DetectedPartNumber, m.part_number, StringComparison.OrdinalIgnoreCase));
+                                if (row != null && !string.IsNullOrEmpty(row.PickedPartNumber))
                                 {
-                                    pickedExistingRemap[m.part_number] = dlg.PickedExistingPartNumber;
+                                    pickedExistingRemap[m.part_number] = row.PickedPartNumber;
                                 }
                                 else
                                 {
