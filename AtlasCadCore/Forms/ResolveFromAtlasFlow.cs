@@ -51,6 +51,17 @@ namespace AtlasCadCore.Forms
                 return;
             }
 
+            // We resolve into two places, in order of preference:
+            //   1) The exact ExpectedPath baked into the assembly file
+            //      (e.g. C:\Users\…\Desktop\C-282088-1-F-3D.CATPart) — when
+            //      writable. CATIA's first lookup rule is the recorded
+            //      absolute path, so dropping the file there means the
+            //      broken-links dialog will NOT appear on subsequent opens.
+            //   2) The assembly's own folder — CATIA / SW's second lookup.
+            //   3) A temp resolve dir — last-ditch, plus AddSearchFolder.
+            string assemblyDir = !string.IsNullOrEmpty(doc.FullPath)
+                ? Path.GetDirectoryName(doc.FullPath)
+                : null;
             string resolveDir = Path.Combine(Path.GetTempPath(), "AtlasCad", "resolve");
             Directory.CreateDirectory(resolveDir);
 
@@ -84,7 +95,8 @@ namespace AtlasCadCore.Forms
                     try
                     {
                         string url = await api.GetS3DownloadUrlAsync(found.Value.S3Key);
-                        string targetPath = Path.Combine(resolveDir, m.Filename);
+                        string targetPath = ChooseTargetPath(m, assemblyDir, resolveDir);
+                        Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
                         if (found.Value.IsStep)
                         {
                             string stepTemp = Path.Combine(resolveDir,
@@ -117,7 +129,7 @@ namespace AtlasCadCore.Forms
             if (unresolved.Count > 0)
             {
                 (uploadedFromLocal, attachedFromAtlas) =
-                    await PromptAndResolveAsync(api, adapter, unresolved, resolveDir);
+                    await PromptAndResolveAsync(api, adapter, unresolved, resolveDir, assemblyDir);
             }
             resolvedFromAtlas += attachedFromAtlas;
 
@@ -149,9 +161,38 @@ namespace AtlasCadCore.Forms
             }
         }
 
+        /// <summary>
+        /// Picks where to drop a resolved file. Prefers the exact path the
+        /// assembly recorded (so CATIA's broken-links dialog doesn't fire on
+        /// next open). Falls back to the assembly's own folder, then to the
+        /// temp resolve dir. Returns the chosen target path; caller is
+        /// responsible for creating the directory.
+        /// </summary>
+        private static string ChooseTargetPath(MissingComponent m, string assemblyDir, string resolveDir)
+        {
+            if (!string.IsNullOrEmpty(m.ExpectedPath))
+            {
+                try
+                {
+                    string parent = Path.GetDirectoryName(m.ExpectedPath);
+                    if (!string.IsNullOrEmpty(parent) && Directory.Exists(parent))
+                        return m.ExpectedPath;
+                    if (!string.IsNullOrEmpty(parent))
+                    {
+                        Directory.CreateDirectory(parent);
+                        return m.ExpectedPath;
+                    }
+                }
+                catch { /* fall through */ }
+            }
+            if (!string.IsNullOrEmpty(assemblyDir) && Directory.Exists(assemblyDir))
+                return Path.Combine(assemblyDir, m.Filename);
+            return Path.Combine(resolveDir, m.Filename);
+        }
+
         private static async Task<(int uploadedFromLocal, int attachedFromAtlas)> PromptAndResolveAsync(
             AtlasApiClient api, ICadAdapter adapter,
-            List<MissingComponent> unresolved, string resolveDir)
+            List<MissingComponent> unresolved, string resolveDir, string assemblyDir)
         {
             using (var dlg = new MissingChildUploadForm(unresolved, api))
             {
@@ -194,8 +235,20 @@ namespace AtlasCadCore.Forms
                         uploaded = result?.attached?.Count ?? 0;
                         foreach (var r in localRows)
                         {
-                            string targetPath = Path.Combine(resolveDir, r.OriginalFilename);
-                            try { File.Copy(r.LocalPath, targetPath, overwrite: true); } catch { }
+                            var stub = new MissingComponent
+                            {
+                                Filename = r.OriginalFilename,
+                                ExpectedPath = unresolved
+                                    .FirstOrDefault(u => string.Equals(u.Filename, r.OriginalFilename, StringComparison.OrdinalIgnoreCase))
+                                    ?.ExpectedPath,
+                            };
+                            string targetPath = ChooseTargetPath(stub, assemblyDir, resolveDir);
+                            try
+                            {
+                                Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
+                                File.Copy(r.LocalPath, targetPath, overwrite: true);
+                            }
+                            catch { }
                         }
                     }
                     catch (Exception ex)
@@ -214,7 +267,15 @@ namespace AtlasCadCore.Forms
                     try
                     {
                         string url = await api.GetS3DownloadUrlAsync(found.Value.S3Key);
-                        string targetPath = Path.Combine(resolveDir, r.OriginalFilename);
+                        var stub = new MissingComponent
+                        {
+                            Filename = r.OriginalFilename,
+                            ExpectedPath = unresolved
+                                .FirstOrDefault(u => string.Equals(u.Filename, r.OriginalFilename, StringComparison.OrdinalIgnoreCase))
+                                ?.ExpectedPath,
+                        };
+                        string targetPath = ChooseTargetPath(stub, assemblyDir, resolveDir);
+                        Directory.CreateDirectory(Path.GetDirectoryName(targetPath));
                         if (found.Value.IsStep)
                         {
                             string stepTemp = Path.Combine(resolveDir,

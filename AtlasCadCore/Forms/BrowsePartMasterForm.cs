@@ -377,6 +377,18 @@ namespace AtlasCadCore.Forms
                 _adapter.OpenDocument(openPath);
                 _statusLabel.Text = $"Opened {Path.GetFileName(openPath)}.";
 
+                // Auto-resolve missing children. Same behaviour as Check Out
+                // — if this is an assembly with broken refs, the plugin
+                // downloads each child to its ExpectedPath so subsequent
+                // opens are clean.
+                try
+                {
+                    SetBusy(true, "Resolving child parts from atlas…");
+                    var openedDoc = _adapter.GetActiveDocument();
+                    await ResolveFromAtlasFlow.RunAsync(_api, _adapter, openedDoc, silentIfNothingMissing: true);
+                }
+                catch (Exception ex) { ShowError("Resolve failed", ex); }
+
                 if (convertedFromStep && !_stpInfoShown)
                 {
                     _stpInfoShown = true;
@@ -414,6 +426,17 @@ namespace AtlasCadCore.Forms
                 if (path == null) { Beep("No insertable file in this revision."); return; }
                 _adapter.InsertComponent(active, path);
                 _statusLabel.Text = $"Inserted {Path.GetFileName(path)}.";
+
+                // If the inserted component is itself a sub-assembly with
+                // broken refs, resolve its children too — otherwise CATIA
+                // re-shows the broken-links dialog on the next save/open.
+                try
+                {
+                    SetBusy(true, "Resolving inserted children from atlas…");
+                    var activeNow = _adapter.GetActiveDocument();
+                    await ResolveFromAtlasFlow.RunAsync(_api, _adapter, activeNow, silentIfNothingMissing: true);
+                }
+                catch (Exception ex) { ShowError("Resolve failed", ex); }
             }
             catch (Exception ex) { ShowError("Insert failed", ex); }
             finally { SetBusy(false, null); }
