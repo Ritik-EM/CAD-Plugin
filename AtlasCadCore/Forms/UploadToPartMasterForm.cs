@@ -105,6 +105,14 @@ namespace AtlasCadCore.Forms
 
                     var byPart = BuildPerPartEntries(native, steps);
 
+                    // Build a tree.json manifest for every assembly node and
+                    // stage it for upload. Each assembly's manifest describes
+                    // its full subtree (part_number + filename + parent), so
+                    // checkout can pre-download every child file before the
+                    // CAD app opens the parent.
+                    progress.SetPhase("Building assembly tree manifests…");
+                    AttachTreeManifests(byPart, native, stepDir);
+
                     progress.SetPhase("Resolving part_numbers against atlas…");
                     byPart = await ResolveAgainstAtlasAsync(api, byPart);
 
@@ -255,6 +263,73 @@ namespace AtlasCadCore.Forms
             return null;
         }
 
+        /// <summary>
+        /// For every entry whose native is an assembly (has at least one
+        /// descendant in `native`), serialise the subtree to a tree.json
+        /// file in `stageDir` and record the path on the PartEntry. The
+        /// upload session ships the file alongside the native/step; backend
+        /// classifies *.json into reference_documents.tree.
+        /// </summary>
+        private static void AttachTreeManifests(
+            List<PartEntry> byPart, List<AssemblyFileRef> native, string stageDir)
+        {
+            if (byPart == null || native == null || native.Count == 0) return;
+            Directory.CreateDirectory(stageDir);
+
+            // pn → all descendants (recursive). Built once, queried per entry.
+            var childrenByParent = new Dictionary<string, List<AssemblyFileRef>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var n in native)
+            {
+                if (string.IsNullOrEmpty(n.ParentPartNumber)) continue;
+                if (!childrenByParent.TryGetValue(n.ParentPartNumber, out var list))
+                    childrenByParent[n.ParentPartNumber] = list = new List<AssemblyFileRef>();
+                list.Add(n);
+            }
+
+            foreach (var entry in byPart)
+            {
+                if (!childrenByParent.ContainsKey(entry.PartNumber)) continue; // not an assembly
+
+                var nodes = new List<object>();
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.PartNumber };
+                void Walk(string pn)
+                {
+                    if (!childrenByParent.TryGetValue(pn, out var kids)) return;
+                    foreach (var k in kids)
+                    {
+                        if (string.IsNullOrEmpty(k.PartNumber) || !seen.Add(k.PartNumber)) continue;
+                        nodes.Add(new
+                        {
+                            part_number = k.PartNumber,
+                            filename = k.Filename,
+                            parent_part_number = k.ParentPartNumber,
+                        });
+                        Walk(k.PartNumber);
+                    }
+                }
+                Walk(entry.PartNumber);
+                if (nodes.Count == 0) continue;
+
+                var manifest = new
+                {
+                    version = 1,
+                    root_part_number = entry.PartNumber,
+                    root_filename = entry.NativeFilename,
+                    nodes = nodes,
+                };
+                // Filename prefixed with the part_number so it lives at a
+                // stable S3 key per part_master, and so the rename-on-bump
+                // logic in atlas-api (_upload_classified rename_from) shifts
+                // it to the new part_number during release-new-revision.
+                string treeFilename = entry.PartNumber + ".tree.json";
+                string treePath = Path.Combine(stageDir, treeFilename);
+                File.WriteAllText(treePath,
+                    Newtonsoft.Json.JsonConvert.SerializeObject(manifest, Newtonsoft.Json.Formatting.Indented));
+                entry.TreeFilename = treeFilename;
+                entry.TreePath = treePath;
+            }
+        }
+
         private static List<PartEntry> BuildPerPartEntries(
             List<AssemblyFileRef> native, List<AssemblyFileRef> steps)
         {
@@ -289,6 +364,13 @@ namespace AtlasCadCore.Forms
             public string NativePath;
             public string StepFilename;
             public string StepPath;
+            // Set only for assembly entries (P7.49). The plugin generates a
+            // manifest describing every descendant and uploads it alongside
+            // the native + step files; backend stores its S3 key under
+            // reference_documents.tree, plugin reads it on checkout to
+            // pre-download children before CATIA/SW opens the assembly.
+            public string TreeFilename;
+            public string TreePath;
             public string DetectedDescription;
 
             public object ToUploadJson() => new
@@ -296,6 +378,7 @@ namespace AtlasCadCore.Forms
                 part_number = PartNumber,
                 filename = NativeFilename,
                 step_filename = StepFilename,
+                tree_filename = TreeFilename,
                 detected_description = DetectedDescription,
             };
 
@@ -303,6 +386,7 @@ namespace AtlasCadCore.Forms
             {
                 if (!string.IsNullOrEmpty(NativePath)) yield return NativePath;
                 if (!string.IsNullOrEmpty(StepPath)) yield return StepPath;
+                if (!string.IsNullOrEmpty(TreePath)) yield return TreePath;
             }
 
             public PartEntry WithPartNumber(string newPn) => new PartEntry
@@ -312,6 +396,8 @@ namespace AtlasCadCore.Forms
                 NativePath = NativePath,
                 StepFilename = StepFilename,
                 StepPath = StepPath,
+                TreeFilename = TreeFilename,
+                TreePath = TreePath,
                 DetectedDescription = DetectedDescription,
             };
         }

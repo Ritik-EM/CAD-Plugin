@@ -2,8 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using AtlasCadCore.Adapter;
 using AtlasCadCore.ApiClient;
 
 namespace AtlasCadCore.Forms
@@ -65,7 +67,81 @@ namespace AtlasCadCore.Forms
             CancelButton = skip;
         }
 
-        public static async Task RunAsync(AtlasApiClient api, string partNumber, string nativeFilePath, string sourceLabel)
+        /// <summary>
+        /// If the contributed file is an assembly (.CATProduct / .sldasm)
+        /// AND the user has that exact file open in their CAD app, walks
+        /// the tree and writes a manifest JSON to %TEMP%. Returns the temp
+        /// file path on success, null otherwise. Caller is responsible for
+        /// including the file in the upload batch.
+        /// </summary>
+        private static string TryBuildTreeJsonForActiveAssembly(
+            ICadAdapter adapter, string nativeFilePath, string partNumber)
+        {
+            if (adapter == null) return null;
+            string ext = Path.GetExtension(nativeFilePath).ToLowerInvariant();
+            if (ext != ".catproduct" && ext != ".sldasm") return null;
+
+            var active = adapter.GetActiveDocument();
+            if (active == null || !active.IsAssembly) return null;
+            if (!string.Equals(active.FullPath, nativeFilePath, StringComparison.OrdinalIgnoreCase))
+                return null; // user picked a different file from disk — can't introspect it
+
+            var native = adapter.WalkAssembly(active) ?? new List<AssemblyFileRef>();
+            // First entry is the root itself; we want descendants. Sub-tree
+            // membership is by ParentPartNumber chain off the root's PN.
+            // Note: the root's PartNumber as walked may differ from the
+            // user-typed partNumber (e.g. the file was originally on a
+            // different PN). Use the walked root's PN to identify children.
+            var root = native.FirstOrDefault(n => n.IsRoot);
+            string rootPn = root?.PartNumber ?? partNumber;
+
+            var byParent = new Dictionary<string, List<AssemblyFileRef>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var n in native)
+            {
+                if (string.IsNullOrEmpty(n.ParentPartNumber)) continue;
+                if (!byParent.TryGetValue(n.ParentPartNumber, out var list))
+                    byParent[n.ParentPartNumber] = list = new List<AssemblyFileRef>();
+                list.Add(n);
+            }
+
+            var nodes = new List<object>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootPn };
+            void Walk(string pn)
+            {
+                if (!byParent.TryGetValue(pn, out var kids)) return;
+                foreach (var k in kids)
+                {
+                    if (string.IsNullOrEmpty(k.PartNumber) || !seen.Add(k.PartNumber)) continue;
+                    nodes.Add(new
+                    {
+                        part_number = k.PartNumber,
+                        filename = k.Filename,
+                        parent_part_number = k.ParentPartNumber,
+                    });
+                    Walk(k.PartNumber);
+                }
+            }
+            Walk(rootPn);
+            if (nodes.Count == 0) return null;
+
+            var manifest = new
+            {
+                version = 1,
+                root_part_number = partNumber,
+                root_filename = Path.GetFileName(nativeFilePath),
+                nodes = nodes,
+            };
+
+            string stageDir = Path.Combine(Path.GetTempPath(), "AtlasCad", "contribute_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(stageDir);
+            string treePath = Path.Combine(stageDir, partNumber + ".tree.json");
+            File.WriteAllText(treePath,
+                Newtonsoft.Json.JsonConvert.SerializeObject(manifest, Newtonsoft.Json.Formatting.Indented));
+            return treePath;
+        }
+
+        public static async Task RunAsync(AtlasApiClient api, string partNumber, string nativeFilePath, string sourceLabel,
+                                          ICadAdapter adapter = null)
         {
             if (string.IsNullOrEmpty(partNumber) || string.IsNullOrEmpty(nativeFilePath) || !File.Exists(nativeFilePath))
                 return;
@@ -81,6 +157,24 @@ namespace AtlasCadCore.Forms
             }
             if (!ok) return;
 
+            // If the contributed file is an assembly AND happens to be the
+            // active CAD document, walk it and emit a tree.json so checkout
+            // can pre-download children. Otherwise upload single-file as
+            // before — atlas-api stores 3d_raw, no manifest.
+            string treeFilename = null;
+            string treePath = null;
+            var filesToUpload = new List<string> { nativeFilePath };
+            try
+            {
+                treePath = TryBuildTreeJsonForActiveAssembly(adapter, nativeFilePath, partNumber);
+                if (!string.IsNullOrEmpty(treePath))
+                {
+                    treeFilename = Path.GetFileName(treePath);
+                    filesToUpload.Add(treePath);
+                }
+            }
+            catch { /* non-fatal: contribute still works without the manifest */ }
+
             try
             {
                 var tree = new List<object>
@@ -90,10 +184,11 @@ namespace AtlasCadCore.Forms
                         part_number = partNumber,
                         filename = filename,
                         step_filename = (string)null,
+                        tree_filename = treeFilename,
                         detected_description = comment,
                     }
                 };
-                var resp = await api.UploadPartMasterAsync(tree, new[] { nativeFilePath });
+                var resp = await api.UploadPartMasterAsync(tree, filesToUpload);
                 int attached = resp.attached?.Count ?? 0;
                 int missing = resp.missing_parts?.Count ?? 0;
                 if (attached > 0)

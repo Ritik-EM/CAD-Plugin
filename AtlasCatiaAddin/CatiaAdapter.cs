@@ -215,14 +215,36 @@ namespace AtlasCadPlugin.Catia
 
         /// <summary>
         /// Best-effort filename inference for a broken/unloaded Product node.
-        /// CATIA's tree typically shows broken children as "InternalID
-        /// [filename.CATPart]" — we extract the bracketed filename when
-        /// present, otherwise treat PartNumber as the basename and append a
-        /// likely extension. Returns a bare filename (no directory) so the
-        /// caller knows to resolve it against the parent assembly's folder.
+        /// V5R21 exposes the source filename's stem via DescriptionInst when
+        /// the referenced doc failed to load (e.g. "C-282088-1-F-3D"). For
+        /// loaded children DescriptionInst is also populated but the primary
+        /// path comes from ReferenceProduct.Parent.FullName — this is only
+        /// hit as a fallback. Returns a bare filename (no directory); the
+        /// caller resolves it against the parent assembly's folder.
         /// </summary>
         private static string TryGuessFilename(Product child)
         {
+            // Strategy A (V5R21-confirmed): DescriptionInst holds the source
+            // filename's stem for broken refs. CATPart is the overwhelmingly
+            // common extension; if the user has broken sub-assemblies we'd
+            // miss them with this assumption — accept that for now since we
+            // can't tell parts from products from the API.
+            try
+            {
+                string desc = child.get_DescriptionInst();
+                if (!string.IsNullOrEmpty(desc))
+                {
+                    string ext = Path.GetExtension(desc).ToLowerInvariant();
+                    if (ext == ".catpart" || ext == ".catproduct" ||
+                        ext == ".stp" || ext == ".step" || ext == ".model")
+                        return desc;
+                    return desc + ".CATPart";
+                }
+            }
+            catch { }
+
+            // Strategy B: scan Product.Name for an embedded filename — rare
+            // but happens when the user manually re-named a broken node.
             try
             {
                 string name = child.get_Name();
@@ -237,11 +259,13 @@ namespace AtlasCadPlugin.Catia
             }
             catch { }
 
+            // Strategy C: PartNumber as basename — for broken children in
+            // V5R21 PartNumber is usually empty, but try anyway.
             try
             {
                 string pn = child.get_PartNumber();
                 if (!string.IsNullOrEmpty(pn))
-                    return pn + ".CATPart"; // best-guess extension
+                    return pn + ".CATPart";
             }
             catch { }
 

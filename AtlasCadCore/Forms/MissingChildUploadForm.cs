@@ -83,12 +83,25 @@ namespace AtlasCadCore.Forms
             };
             _grid.RowTemplate.Height = 28;
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Part Number", Name = "pn", Width = 140, ReadOnly = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename (expected)", Name = "filename", Width = 240, ReadOnly = true });
+            // Filename column is EDITABLE — CATIA V5R21 doesn't tell us
+            // whether a broken child was originally a .CATPart or
+            // .CATProduct, so we default to .CATPart and let the user fix
+            // it when they know the original was a sub-assembly. When the
+            // user picks an atlas part we also auto-update the extension
+            // to match atlas's native filename.
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename (editable)", Name = "filename", Width = 240, ReadOnly = false });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Resolution", Name = "picked", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "browse", Text = "Browse Local…", UseColumnTextForButtonValue = true, Width = 110 });
             _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "atlas", Text = "Pick from Atlas…", UseColumnTextForButtonValue = true, Width = 130 });
             _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "clear", Text = "Clear", UseColumnTextForButtonValue = true, Width = 60 });
             _grid.CellContentClick += OnGridButtonClick;
+            _grid.CellEndEdit += (s, e) =>
+            {
+                if (e.RowIndex < 0 || _grid.Columns[e.ColumnIndex].Name != "filename") return;
+                var edited = _grid.Rows[e.RowIndex].Cells["filename"].Value?.ToString();
+                if (!string.IsNullOrWhiteSpace(edited))
+                    _rows[e.RowIndex].OriginalFilename = edited.Trim();
+            };
 
             var bottom = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10) };
 
@@ -184,6 +197,12 @@ namespace AtlasCadCore.Forms
                     row.LocalPath = ofd.FileName;
                     row.AtlasPartNumber = null;
                     row.AtlasDescription = null;
+
+                    // Sync the editable filename column's extension to
+                    // match the picked local file — so CATIA finds the
+                    // dropped file under the right name.
+                    SyncFilenameExtension(e.RowIndex, row, Path.GetExtension(ofd.FileName));
+
                     _grid.Rows[e.RowIndex].Cells["picked"].Value =
                         "local: " + Path.GetFileName(ofd.FileName);
                 }
@@ -203,6 +222,13 @@ namespace AtlasCadCore.Forms
                     row.AtlasPartNumber = dlg.SelectedPartNumber;
                     row.AtlasDescription = dlg.SelectedDescription;
                     row.LocalPath = null;
+
+                    // We don't know the atlas part's native filename here
+                    // (would need an extra API call). Leave the extension
+                    // as-is and trust the user — they can edit the
+                    // filename column directly if the default guess is
+                    // wrong for this child.
+
                     _grid.Rows[e.RowIndex].Cells["picked"].Value =
                         string.IsNullOrEmpty(row.AtlasDescription)
                             ? "atlas: " + row.AtlasPartNumber
@@ -216,6 +242,19 @@ namespace AtlasCadCore.Forms
                 row.AtlasDescription = null;
                 _grid.Rows[e.RowIndex].Cells["picked"].Value = "";
             }
+        }
+
+        private void SyncFilenameExtension(int rowIndex, Row row, string newExt)
+        {
+            if (string.IsNullOrEmpty(newExt)) return;
+            string current = row.OriginalFilename ?? "";
+            string stem = string.IsNullOrEmpty(current)
+                ? row.PartNumber ?? "unknown"
+                : Path.GetFileNameWithoutExtension(current);
+            string updated = stem + newExt;
+            if (string.Equals(updated, current, StringComparison.OrdinalIgnoreCase)) return;
+            row.OriginalFilename = updated;
+            _grid.Rows[rowIndex].Cells["filename"].Value = updated;
         }
 
         private void UpdateOtpUi()

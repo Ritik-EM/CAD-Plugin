@@ -374,6 +374,25 @@ namespace AtlasCadCore.Forms
                     convertedFromStep = true;
                 }
 
+                // P7.49 pre-flight: native assemblies' children are
+                // downloaded ahead of OpenDocument when atlas has a tree
+                // manifest for this part. STP-imported docs have no atlas
+                // children so we skip the preflight for those.
+                if (!convertedFromStep)
+                {
+                    var revForTree = RevisionByPartNumber(pn) ?? LatestActiveRevision(_selected, null);
+                    if (revForTree != null)
+                    {
+                        SetBusy(true, "Pre-downloading assembly children…");
+                        try
+                        {
+                            await TreeManifestPreflight.PreflightAsync(
+                                _api, revForTree, Path.GetDirectoryName(openPath));
+                        }
+                        catch { /* non-fatal */ }
+                    }
+                }
+
                 _adapter.OpenDocument(openPath);
                 _statusLabel.Text = $"Opened {Path.GetFileName(openPath)}.";
 
@@ -424,6 +443,22 @@ namespace AtlasCadCore.Forms
                 SetBusy(true, "Downloading…");
                 string path = await DownloadPreferredAsync(pn, prefersNative: true);
                 if (path == null) { Beep("No insertable file in this revision."); return; }
+
+                // P7.49 pre-flight: if the part we're inserting is itself a
+                // sub-assembly, drop its children at their expected paths
+                // before InsertComponent triggers a CAD-side load.
+                var revForTree = RevisionByPartNumber(pn) ?? LatestActiveRevision(_selected, null);
+                if (revForTree != null)
+                {
+                    SetBusy(true, "Pre-downloading sub-assembly children…");
+                    try
+                    {
+                        await TreeManifestPreflight.PreflightAsync(
+                            _api, revForTree, Path.GetDirectoryName(path));
+                    }
+                    catch { /* non-fatal */ }
+                }
+
                 _adapter.InsertComponent(active, path);
                 _statusLabel.Text = $"Inserted {Path.GetFileName(path)}.";
 
@@ -486,6 +521,19 @@ namespace AtlasCadCore.Forms
                 }
 
                 CheckoutTracker.Track(picked.Path, pn);
+
+                // P7.49 pre-flight: if atlas has a tree manifest for this
+                // assembly, download every child to its expected path BEFORE
+                // calling OpenDocument — CATIA/SW will then find every
+                // reference on disk and skip the broken-links dialog.
+                SetBusy(true, "Pre-downloading assembly children…");
+                try
+                {
+                    await TreeManifestPreflight.PreflightAsync(
+                        _api, rev, Path.GetDirectoryName(picked.Path));
+                }
+                catch { /* non-fatal — Resolve flow below picks up anything we missed */ }
+
                 _adapter.OpenDocument(picked.Path);
 
                 SetBusy(true, "Resolving child parts from atlas…");
@@ -558,7 +606,8 @@ namespace AtlasCadCore.Forms
                 if (dlg.ShowDialog() != DialogResult.OK) return;
                 await ContributeNativeFileForm.RunAsync(
                     _api, pn, dlg.FileName,
-                    sourceLabel: "selected from local disk");
+                    sourceLabel: "selected from local disk",
+                    adapter: _adapter);
             }
             await ReloadAsync();
         }
