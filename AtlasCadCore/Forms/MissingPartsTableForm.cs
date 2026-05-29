@@ -76,9 +76,13 @@ namespace AtlasCadCore.Forms
             };
             _grid.RowTemplate.Height = 28;
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Detected Part Number", Name = "pn", Width = 170, ReadOnly = true });
-            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename", Name = "filename", Width = 280, ReadOnly = true });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename", Name = "filename", Width = 240, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Attach to (atlas part_number)", Name = "picked", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "pick", Text = "Pick Existing…", UseColumnTextForButtonValue = true, Width = 120 });
+            // P7.59: in-plugin create flow. Opens CreateNewPartMasterDialog,
+            // calls atlas-api create_batch, attaches the file to the minted
+            // part_number — no need to leave the plugin for atlas-ui.
+            _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "create", Text = "Create New…", UseColumnTextForButtonValue = true, Width = 110 });
             _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "clear", Text = "Clear", UseColumnTextForButtonValue = true, Width = 60 });
             _grid.CellContentClick += OnGridButtonClick;
 
@@ -142,6 +146,19 @@ namespace AtlasCadCore.Forms
                             : $"{row.PickedPartNumber}   —   {row.PickedDescription}";
                 }
             }
+            else if (colName == "create")
+            {
+                var row = _rows[e.RowIndex];
+                using (var dlg = new CreateNewPartMasterDialog(_api, row.DetectedPartNumber, row.Filename))
+                {
+                    if (dlg.ShowDialog(this) != DialogResult.OK) return;
+                    if (string.IsNullOrEmpty(dlg.MintedPartNumber)) return;
+                    row.PickedPartNumber = dlg.MintedPartNumber;
+                    row.PickedDescription = $"newly created ({dlg.MintedReleaseType})";
+                    _grid.Rows[e.RowIndex].Cells["picked"].Value =
+                        $"{row.PickedPartNumber}   —   {row.PickedDescription}";
+                }
+            }
             else if (colName == "clear")
             {
                 _rows[e.RowIndex].PickedPartNumber = null;
@@ -153,7 +170,7 @@ namespace AtlasCadCore.Forms
         private void Populate()
         {
             foreach (var r in _rows)
-                _grid.Rows.Add(r.DetectedPartNumber, r.Filename, "", null, null);
+                _grid.Rows.Add(r.DetectedPartNumber, r.Filename, "", null, null, null);
             if (_grid.Rows.Count > 0) _grid.CurrentCell = _grid.Rows[0].Cells["pn"];
         }
     }

@@ -312,6 +312,28 @@ namespace AtlasCadCore.ApiClient
             throw last;
         }
 
+        /// <summary>
+        /// P7.49: presigns the S3 key, GETs JSON bytes, deserialises into T.
+        /// Returns null on any failure — callers treat null as "no manifest
+        /// available, fall back to the Resolve-from-Atlas flow".
+        /// </summary>
+        public async Task<T> DownloadJsonByS3KeyAsync<T>(string s3Key) where T : class
+        {
+            if (string.IsNullOrEmpty(s3Key)) return null;
+            try
+            {
+                string url = await GetS3DownloadUrlAsync(s3Key);
+                using (var req = new HttpRequestMessage(HttpMethod.Get, url))
+                using (var resp = await _s3Http.SendAsync(req))
+                {
+                    resp.EnsureSuccessStatusCode();
+                    string body = await resp.Content.ReadAsStringAsync();
+                    return JsonConvert.DeserializeObject<T>(body);
+                }
+            }
+            catch { return null; }
+        }
+
         internal static Stream OpenSharedRead(string path)
         {
             try

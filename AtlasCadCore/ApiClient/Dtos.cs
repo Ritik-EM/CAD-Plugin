@@ -11,6 +11,13 @@ namespace AtlasCadCore.ApiClient
         public string Drawing2d;
         public string Step3d;
         public string Native3dRaw;
+        // P7.48/49 (reinstated by P7.57). Set only for assemblies uploaded
+        // by the plugin. Plugin downloads this on checkout to pre-fetch
+        // every child file BEFORE OpenDocument fires, so CATIA/SW find
+        // every reference on disk and skip the broken-links dialog. R2025's
+        // Product COM API does not expose broken-ref filenames at all, so
+        // this manifest is the only way to resolve children on R2025.
+        public string TreeJson;
     }
 
     internal class ReferenceDocumentsConverter : JsonConverter<ReferenceDocumentsDto>
@@ -28,6 +35,7 @@ namespace AtlasCadCore.ApiClient
                 dto.Drawing2d = obj["2d"]?.Type == JTokenType.String ? obj["2d"].Value<string>() : null;
                 dto.Step3d = obj["3d"]?.Type == JTokenType.String ? obj["3d"].Value<string>() : null;
                 dto.Native3dRaw = obj["3d_raw"]?.Type == JTokenType.String ? obj["3d_raw"].Value<string>() : null;
+                dto.TreeJson = obj["tree"]?.Type == JTokenType.String ? obj["tree"].Value<string>() : null;
                 return dto;
             }
             if (token.Type == JTokenType.Array)
@@ -43,6 +51,7 @@ namespace AtlasCadCore.ApiClient
                     else if (ext == ".sldprt" || ext == ".sldasm"
                           || ext == ".catpart" || ext == ".catproduct"
                           || ext == ".prt") dto.Native3dRaw = key;
+                    else if (ext == ".json") dto.TreeJson = key;
                 }
                 return dto;
             }
@@ -55,6 +64,7 @@ namespace AtlasCadCore.ApiClient
             obj["2d"] = value?.Drawing2d;
             obj["3d"] = value?.Step3d;
             obj["3d_raw"] = value?.Native3dRaw;
+            obj["tree"] = value?.TreeJson;
             obj.WriteTo(writer);
         }
     }

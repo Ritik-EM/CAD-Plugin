@@ -61,10 +61,12 @@
     <Compile Include="Forms\MissingChildUploadForm.cs" />
     <Compile Include="Forms\MissingPartChoiceForm.cs" />
     <Compile Include="Forms\MissingPartsTableForm.cs" />
+    <Compile Include="Forms\CreateNewPartMasterDialog.cs" />
     <Compile Include="Forms\MyCheckoutsForm.cs" />
     <Compile Include="Forms\PartMasterPickerDialog.cs" />
     <Compile Include="Forms\ProgressForm.cs" />
     <Compile Include="Forms\ResolveFromAtlasFlow.cs" />
+    <Compile Include="Forms\TreeManifestPreflight.cs" />
     <Compile Include="Forms\UploadToPartMasterForm.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Utility\AtlasErrorReporter.cs" />
