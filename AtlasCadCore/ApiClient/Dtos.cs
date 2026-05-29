@@ -11,12 +11,6 @@ namespace AtlasCadCore.ApiClient
         public string Drawing2d;
         public string Step3d;
         public string Native3dRaw;
-        // Plugin-generated assembly manifest, set only for assemblies
-        // uploaded after P7.48 (tree.json flow). When present, checkout
-        // downloads this first and pre-fetches every child file before
-        // CATIA/SW opens the parent — no broken-links dialog. Null on
-        // legacy assemblies; the old Resolve-from-Atlas flow handles those.
-        public string TreeJson;
     }
 
     internal class ReferenceDocumentsConverter : JsonConverter<ReferenceDocumentsDto>
@@ -34,7 +28,6 @@ namespace AtlasCadCore.ApiClient
                 dto.Drawing2d = obj["2d"]?.Type == JTokenType.String ? obj["2d"].Value<string>() : null;
                 dto.Step3d = obj["3d"]?.Type == JTokenType.String ? obj["3d"].Value<string>() : null;
                 dto.Native3dRaw = obj["3d_raw"]?.Type == JTokenType.String ? obj["3d_raw"].Value<string>() : null;
-                dto.TreeJson = obj["tree"]?.Type == JTokenType.String ? obj["tree"].Value<string>() : null;
                 return dto;
             }
             if (token.Type == JTokenType.Array)
@@ -50,7 +43,6 @@ namespace AtlasCadCore.ApiClient
                     else if (ext == ".sldprt" || ext == ".sldasm"
                           || ext == ".catpart" || ext == ".catproduct"
                           || ext == ".prt") dto.Native3dRaw = key;
-                    else if (ext == ".json") dto.TreeJson = key;
                 }
                 return dto;
             }
@@ -63,7 +55,6 @@ namespace AtlasCadCore.ApiClient
             obj["2d"] = value?.Drawing2d;
             obj["3d"] = value?.Step3d;
             obj["3d_raw"] = value?.Native3dRaw;
-            obj["tree"] = value?.TreeJson;
             obj.WriteTo(writer);
         }
     }

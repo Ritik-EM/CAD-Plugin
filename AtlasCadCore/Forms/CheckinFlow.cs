@@ -178,12 +178,6 @@ namespace AtlasCadCore.Forms
 
                     var entries = BuildPartEntries(native, steps, rootPartNumber);
 
-                    // P7.49: regenerate tree.json for every assembly node so
-                    // the stored manifest stays in sync after this revision
-                    // lands. Atlas-api classifies *.json into
-                    // reference_documents.tree, replacing the prior manifest.
-                    AttachTreeManifests(entries, stepDir);
-
                     if (entries.Count == 0)
                     {
                         progress.Hide();
@@ -329,60 +323,6 @@ namespace AtlasCadCore.Forms
 
         private static void Beep() => System.Media.SystemSounds.Beep.Play();
 
-        private static void AttachTreeManifests(List<PartEntry> entries, string stageDir)
-        {
-            if (entries == null || entries.Count == 0) return;
-            Directory.CreateDirectory(stageDir);
-
-            var childrenByParent = new Dictionary<string, List<PartEntry>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var e in entries)
-            {
-                if (string.IsNullOrEmpty(e.ParentPartNumber)) continue;
-                if (!childrenByParent.TryGetValue(e.ParentPartNumber, out var list))
-                    childrenByParent[e.ParentPartNumber] = list = new List<PartEntry>();
-                list.Add(e);
-            }
-
-            foreach (var entry in entries)
-            {
-                if (!childrenByParent.ContainsKey(entry.PartNumber)) continue;
-
-                var nodes = new List<object>();
-                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.PartNumber };
-                void Walk(string pn)
-                {
-                    if (!childrenByParent.TryGetValue(pn, out var kids)) return;
-                    foreach (var k in kids)
-                    {
-                        if (string.IsNullOrEmpty(k.PartNumber) || !seen.Add(k.PartNumber)) continue;
-                        nodes.Add(new
-                        {
-                            part_number = k.PartNumber,
-                            filename = k.NativeFilename,
-                            parent_part_number = k.ParentPartNumber,
-                        });
-                        Walk(k.PartNumber);
-                    }
-                }
-                Walk(entry.PartNumber);
-                if (nodes.Count == 0) continue;
-
-                var manifest = new
-                {
-                    version = 1,
-                    root_part_number = entry.PartNumber,
-                    root_filename = entry.NativeFilename,
-                    nodes = nodes,
-                };
-                string treeFilename = entry.PartNumber + ".tree.json";
-                string treePath = Path.Combine(stageDir, treeFilename);
-                File.WriteAllText(treePath,
-                    Newtonsoft.Json.JsonConvert.SerializeObject(manifest, Newtonsoft.Json.Formatting.Indented));
-                entry.TreeFilename = treeFilename;
-                entry.TreePath = treePath;
-            }
-        }
-
         private static List<PartEntry> BuildPartEntries(
             List<AssemblyFileRef> native, List<AssemblyFileRef> steps, string rootPartNumber)
         {
@@ -461,10 +401,6 @@ namespace AtlasCadCore.Forms
             public string NativePath;
             public string StepFilename;
             public string StepPath;
-            // P7.49: assembly nodes get a fresh tree.json on each check-in
-            // so the stored manifest stays in sync with the latest structure.
-            public string TreeFilename;
-            public string TreePath;
             public string Sha256;
             public int Depth;
 
@@ -474,7 +410,6 @@ namespace AtlasCadCore.Forms
                 parent_part_number = ParentPartNumber,
                 filename = NativeFilename,
                 step_filename = StepFilename,
-                tree_filename = TreeFilename,
                 sha256 = Sha256,
             };
 
@@ -482,7 +417,6 @@ namespace AtlasCadCore.Forms
             {
                 if (!string.IsNullOrEmpty(NativePath)) yield return NativePath;
                 if (!string.IsNullOrEmpty(StepPath)) yield return StepPath;
-                if (!string.IsNullOrEmpty(TreePath)) yield return TreePath;
             }
         }
     }
