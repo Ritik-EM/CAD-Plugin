@@ -26,11 +26,19 @@ namespace AtlasCadCore.Forms
 
         private readonly AtlasApiClient _api;
         private readonly List<Row> _rows;
+        private readonly string _headerText;
+        private readonly string _title;
         private DataGridView _grid;
 
         public IReadOnlyList<Row> Rows => _rows;
 
-        public MissingPartsTableForm(AtlasApiClient api, IEnumerable<MissingPartDto> missing)
+        /// <param name="headerText">Overrides the explanatory header. When null,
+        /// the default "aren't released on atlas yet" wording is used (the
+        /// post-upload case). Pass a custom string for other contexts (e.g.
+        /// the pre-upload "assign a part_number" prompt).</param>
+        /// <param name="title">Overrides the window title.</param>
+        public MissingPartsTableForm(AtlasApiClient api, IEnumerable<MissingPartDto> missing,
+                                     string headerText = null, string title = null)
         {
             _api = api;
             _rows = (missing ?? Enumerable.Empty<MissingPartDto>())
@@ -40,13 +48,15 @@ namespace AtlasCadCore.Forms
                     Filename = m.filename ?? "",
                 })
                 .ToList();
+            _headerText = headerText;
+            _title = title;
             BuildUi();
             Populate();
         }
 
         private void BuildUi()
         {
-            Text = "Atlas — Parts Not Found";
+            Text = _title ?? "Atlas — Parts Not Found";
             Size = new Size(980, 520);
             StartPosition = FormStartPosition.CenterParent;
             MinimumSize = new Size(780, 360);
@@ -55,9 +65,10 @@ namespace AtlasCadCore.Forms
             {
                 Dock = DockStyle.Fill,
                 Padding = new Padding(10, 8, 10, 0),
-                Text = $"{_rows.Count} part_number(s) aren't released on atlas yet.\r\n" +
-                       "For each row, click \"Pick Existing…\" to attach the file to an existing atlas " +
-                       "part_number, or leave it blank to skip (release on atlas-ui first).",
+                Text = _headerText ??
+                       ($"{_rows.Count} part_number(s) aren't released on atlas yet.\r\n" +
+                        "For each row, click \"Pick Existing…\" to attach the file to an existing atlas " +
+                        "part_number, or leave it blank to skip (release on atlas-ui first)."),
             };
 
             _grid = new DataGridView

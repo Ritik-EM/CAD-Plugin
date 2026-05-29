@@ -74,8 +74,27 @@ namespace AtlasCadCore.Forms
                         }
 
                         progress.SetPhase("Walking assembly tree…");
-                        native = adapter.WalkAssembly(doc) ?? new List<AssemblyFileRef>();
-                        native = native.Where(n => string.IsNullOrEmpty(n.SkipReason)).ToList();
+                        var walked = adapter.WalkAssembly(doc) ?? new List<AssemblyFileRef>();
+                        native = walked.Where(n => string.IsNullOrEmpty(n.SkipReason)).ToList();
+
+                        // Parts that have a real native file on disk but whose
+                        // filename didn't yield a valid part_number get a
+                        // SkipReason of "no-part-number". Rather than silently
+                        // dropping them (which leaves them missing on checkout),
+                        // prompt the user to map/create a part_number per part,
+                        // or skip it. Whatever they assign is folded back into
+                        // the upload set.
+                        var needsPartNumber = walked
+                            .Where(n => n.SkipReason == "no-part-number"
+                                        && !string.IsNullOrEmpty(n.FullPath)
+                                        && File.Exists(n.FullPath))
+                            .ToList();
+                        if (needsPartNumber.Count > 0)
+                        {
+                            progress.Hide();
+                            native.AddRange(PromptAssignPartNumbers(api, needsPartNumber));
+                            progress.Show();
+                        }
                     }
                     else
                     {
@@ -218,6 +237,52 @@ namespace AtlasCadCore.Forms
                     try { if (stepDir != null) Directory.Delete(stepDir, recursive: true); } catch { }
                 }
             }
+        }
+
+        /// <summary>
+        /// Per-part prompt for native files whose filename didn't produce a
+        /// valid part_number. Reuses MissingPartsTableForm so the user gets the
+        /// same Pick Existing… / Create New… / skip choices used elsewhere.
+        /// Returns only the entries the user assigned a part_number to (with
+        /// PartNumber set and SkipReason cleared, ready for upload); rows left
+        /// blank are treated as "skip" and omitted.
+        /// Rows align by index with <paramref name="needsPartNumber"/>.
+        /// </summary>
+        private static List<AssemblyFileRef> PromptAssignPartNumbers(
+            AtlasApiClient api, List<AssemblyFileRef> needsPartNumber)
+        {
+            var assigned = new List<AssemblyFileRef>();
+
+            var dtos = needsPartNumber.Select(n => new MissingPartDto
+            {
+                // Seed the picker's search box with the best guess we have so
+                // the user isn't typing from scratch.
+                part_number = AtlasCadCore.Utility.PartNumberParser.ExtractLeadingCode(n.Filename)
+                              ?? Path.GetFileNameWithoutExtension(n.Filename ?? ""),
+                filename = n.Filename,
+            }).ToList();
+
+            string header =
+                $"{needsPartNumber.Count} part(s) don't have a valid Atlas part_number " +
+                "(their filename doesn't match the part-number format).\r\n" +
+                "For each part: \"Pick Existing…\" to map it to an Atlas part_number, " +
+                "\"Create New…\" to mint one, or leave it blank to skip it. " +
+                "Skipped parts are NOT uploaded and will be missing on checkout.";
+
+            using (var dlg = new MissingPartsTableForm(api, dtos,
+                       headerText: header, title: "Atlas — Assign Part Numbers"))
+            {
+                dlg.ShowDialog();
+                for (int i = 0; i < needsPartNumber.Count && i < dlg.Rows.Count; i++)
+                {
+                    string picked = dlg.Rows[i].PickedPartNumber;
+                    if (string.IsNullOrEmpty(picked)) continue; // skipped by user
+                    needsPartNumber[i].PartNumber = picked;
+                    needsPartNumber[i].SkipReason = null;
+                    assigned.Add(needsPartNumber[i]);
+                }
+            }
+            return assigned;
         }
 
         private static void EnsurePlaceholderPartNumbers(List<AssemblyFileRef> entries)

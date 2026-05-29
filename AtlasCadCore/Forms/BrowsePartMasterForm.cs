@@ -403,6 +403,7 @@ namespace AtlasCadCore.Forms
                 }
 
                 // P7.49 preflight (skip for STP-imported — no atlas children).
+                TreeManifestPreflight.PreflightResult preflight = null;
                 if (!convertedFromStep)
                 {
                     var revForTree = RevisionByPartNumber(pn) ?? LatestActiveRevision(_selected, null);
@@ -411,7 +412,7 @@ namespace AtlasCadCore.Forms
                         SetBusy(true, "Pre-downloading assembly children…");
                         try
                         {
-                            await TreeManifestPreflight.PreflightAsync(
+                            preflight = await TreeManifestPreflight.PreflightAsync(
                                 _api, revForTree, Path.GetDirectoryName(openPath));
                         }
                         catch { /* non-fatal */ }
@@ -432,6 +433,11 @@ namespace AtlasCadCore.Forms
                     await ResolveFromAtlasFlow.RunAsync(_api, _adapter, openedDoc, silentIfNothingMissing: true);
                 }
                 catch (Exception ex) { ShowError("Resolve failed", ex); }
+
+                // Manifest-driven report of parts not yet in Atlas (the
+                // authoritative "still to upload" list).
+                SetBusy(false, null);
+                ChildrenToUploadForm.ShowIfAny(preflight?.Missing);
 
                 if (convertedFromStep && !_stpInfoShown)
                 {
@@ -550,9 +556,10 @@ namespace AtlasCadCore.Forms
                 // manifest BEFORE OpenDocument so CATIA/SW skip the
                 // broken-links dialog. Required for R2025.
                 SetBusy(true, "Pre-downloading assembly children…");
+                TreeManifestPreflight.PreflightResult preflight = null;
                 try
                 {
-                    await TreeManifestPreflight.PreflightAsync(
+                    preflight = await TreeManifestPreflight.PreflightAsync(
                         _api, rev, Path.GetDirectoryName(picked.Path));
                 }
                 catch { /* non-fatal — Resolve flow below picks up anything we missed */ }
@@ -562,6 +569,12 @@ namespace AtlasCadCore.Forms
                 SetBusy(true, "Resolving child parts from atlas…");
                 var openedDoc = _adapter.GetActiveDocument();
                 await ResolveFromAtlasFlow.RunAsync(_api, _adapter, openedDoc, silentIfNothingMissing: true);
+
+                // Manifest-driven report: parts the assembly references that
+                // aren't in Atlas yet (so they couldn't be downloaded) — the
+                // authoritative "you still need to upload these" list.
+                SetBusy(false, null);
+                ChildrenToUploadForm.ShowIfAny(preflight?.Missing);
 
                 try
                 {

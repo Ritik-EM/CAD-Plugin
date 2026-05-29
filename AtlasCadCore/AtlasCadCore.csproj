@@ -54,6 +54,7 @@
     <Compile Include="Auth\TokenStore.cs" />
     <Compile Include="Forms\AssignPartMetadataForm.cs" />
     <Compile Include="Forms\BrowsePartMasterForm.cs" />
+    <Compile Include="Forms\ChildrenToUploadForm.cs" />
     <Compile Include="Forms\CheckinFlow.cs" />
     <Compile Include="Forms\CheckinPropagationForm.cs" />
     <Compile Include="Forms\ContributeNativeFileForm.cs" />
