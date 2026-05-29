@@ -171,6 +171,12 @@ namespace AtlasCadCore.Forms
                 DropDownStyle = ComboBoxStyle.DropDownList,
                 Enabled = false,
             };
+            // P7.55: when user switches between revisions of the same
+            // part_master (e.g. PRODUCTION vs PROTO), recompute Open/Insert/
+            // CheckOut enabled state against the freshly-selected revision's
+            // reference_documents. Without this the buttons stay frozen on
+            // whatever LatestActiveRevision returned at row-selection time.
+            _revisionCombo.SelectedIndexChanged += (s, e) => RefreshActionButtonsForSelectedRevision();
             actionPanel.Controls.Add(_revisionCombo);
 
             _openBtn = new Button { Text = "Open in " + _adapter.CadName, Location = new Point(0, 40), Width = 150, Enabled = false };
@@ -328,8 +334,30 @@ namespace AtlasCadCore.Forms
 
             PopulateRevisionCombo(_selected, releaseType);
 
-            var latest = LatestActiveRevision(_selected, releaseType);
-            var refs = latest?.EffectiveRefs;
+            // Button states are computed against whichever revision the user
+            // has selected in the dropdown (defaults to the active one when
+            // a new row is picked). Pulled into its own method so the
+            // SelectedIndexChanged handler can recompute when user changes
+            // dropdown without re-selecting the grid row.
+            RefreshActionButtonsForSelectedRevision();
+        }
+
+        private void RefreshActionButtonsForSelectedRevision()
+        {
+            if (_selected == null)
+            {
+                _openBtn.Enabled = _insertBtn.Enabled = _checkoutBtn.Enabled = _cancelCheckoutBtn.Enabled = false;
+                return;
+            }
+
+            string releaseType = _releaseTypeCombo.SelectedItem as string;
+            if (releaseType == "All") releaseType = null;
+
+            // Prefer the dropdown-selected revision over LatestActiveRevision.
+            // Falls back to the active one if nothing is picked yet.
+            var rev = RevisionByPartNumber(SelectedPartNumber())
+                      ?? LatestActiveRevision(_selected, releaseType);
+            var refs = rev?.EffectiveRefs;
             bool hasFile = CountRefs(refs) > 0;
             bool hasNative = !string.IsNullOrEmpty(refs?.Native3dRaw);
             bool hasActiveAssembly = false;
