@@ -14,7 +14,7 @@ namespace AtlasCadPlugin.Catia
 {
     public class CatiaAdapter : ICadAdapter
     {
-        public const string WalkAssemblyVersion = "2026-05-28-parity-v1";
+        public const string WalkAssemblyVersion = "2026-05-29-structural-recursion-v2";
 
         private readonly Application _catApp;
 
@@ -113,43 +113,79 @@ namespace AtlasCadPlugin.Catia
             return result;
         }
 
-        // Walks Product children without re-opening their backing Documents.
-        // CATIA exposes the on-disk path via Product.ReferenceProduct.Parent
-        // when the doc is already loaded, OR via the child Product's File-
-        // related properties when it isn't. We avoid Documents.Open here to
-        // skip the "Several editors are opened" warning (P7.39) — only fall
-        // back to opening when we genuinely can't read the metadata otherwise.
+        // Walks the Product tree depth-first. The KEY parity fix vs. the old
+        // implementation: recursion into sub-assemblies is driven by STRUCTURE
+        // (does this node aggregate child Products?), NOT by whether we managed
+        // to resolve a ".CATProduct" path for it. Previously a sub-assembly
+        // whose backing path couldn't be resolved — or whose filename didn't
+        // parse to a part-number — was tagged with a SkipReason, and that both
+        // dropped it from the upload AND suppressed recursion, so its entire
+        // subtree of children went missing. SolidWorks never hit this because
+        // it decides "recurse?" from the loaded doc's type (swDocASSEMBLY). We
+        // now mirror that: any node with children is walked, regardless of its
+        // own skip status (suppressed nodes excepted).
+        //
+        // We also recurse on the child INSTANCE (`child.Products`) rather than
+        // `child.ReferenceProduct.Products`. Both expose the same components,
+        // but the instance path doesn't depend on ReferenceProduct resolving,
+        // which can fail on some CATIA builds.
         private void WalkProductTree(Product parent, string parentPn,
                                       List<AssemblyFileRef> output, HashSet<string> seenPaths)
         {
             Products children;
             try { children = parent.Products; }
-            catch { return; }
-            if (children == null) return;
+            catch (Exception ex) { LogWalk($"  parent.Products threw: {ex.Message}"); return; }
+            if (children == null) { LogWalk("  parent.Products == null"); return; }
 
-            for (int i = 1; i <= children.Count; i++)
+            int count = 0;
+            try { count = children.Count; }
+            catch (Exception ex) { LogWalk($"  children.Count threw: {ex.Message}"); }
+            LogWalk($"  parent PN='{parentPn}' has {count} immediate child node(s)");
+
+            for (int i = 1; i <= count; i++)
             {
                 Product child;
                 try { child = children.Item(i); }
-                catch { continue; }
-                if (child == null) continue;
+                catch (Exception ex) { LogWalk($"  child[{i}] Item() threw: {ex.Message}"); continue; }
+                if (child == null) { LogWalk($"  child[{i}] == null"); continue; }
 
                 string fullPath = TryGetChildPath(child);
                 string childFilename = string.IsNullOrEmpty(fullPath) ? null : Path.GetFileName(fullPath);
+                bool hasChildren = ProductHasChildren(child);
+
+                // Per-node diagnostics — mirrors CollectMissingChildren so the
+                // upload path is no longer a black box when children go missing.
+                string cName = null, cPn = null, cDesc = null;
+                try { cName = ProductName(child); } catch { }
+                try { cPn = ProductPartNumber(child); } catch { }
+                try { cDesc = ProductDescriptionInst(child); } catch { }
+                LogWalk($"  child[{i}]: Name='{cName}' PN='{cPn}' DescInst='{cDesc}' " +
+                        $"path='{fullPath}' hasChildren={hasChildren}");
 
                 // Suppression detection: V5R21 doesn't expose IsActivated on
                 // Product so the reflection helper returns null there → we
                 // skip the check. V5R2025+ exposes it → suppressed components
-                // get tagged explicitly. Either way, no-path/missing-file
-                // catch components the filter would have dropped anyway.
+                // get tagged explicitly.
                 string skipReason = null;
                 bool? activated = TryReadBoolProp(child, "IsActivated");
                 if (activated == false) skipReason = "suppressed";
                 else if (string.IsNullOrEmpty(fullPath)) skipReason = "no-path";
                 else if (!System.IO.File.Exists(fullPath)) skipReason = "missing-file";
 
-                if (skipReason == null && !seenPaths.Add(fullPath))
+                // Dedup on the resolved path so a part reused across the tree is
+                // uploaded once. Path-less nodes (skipReason already set) bypass
+                // the dedup — a null key would otherwise collapse every path-
+                // less node into one. We add to seenPaths for ANY resolved path
+                // (even skipped ones) so the same file is never re-walked.
+                bool duplicate = false;
+                if (!string.IsNullOrEmpty(fullPath) && !seenPaths.Add(fullPath))
+                    duplicate = true;
+
+                if (duplicate)
+                {
+                    LogWalk($"  child[{i}]: duplicate of already-walked '{fullPath}' — skipped");
                     continue;
+                }
 
                 // Resolve part_number from the reference Document if it's
                 // already loaded; don't force-open just to read it.
@@ -161,7 +197,7 @@ namespace AtlasCadPlugin.Catia
                 string displayName = childFilename;
                 if (string.IsNullOrEmpty(displayName))
                 {
-                    try { displayName = ProductName(child); } catch { }
+                    displayName = cName;
                     if (string.IsNullOrEmpty(displayName)) displayName = "(unnamed component)";
                 }
 
@@ -177,15 +213,30 @@ namespace AtlasCadPlugin.Catia
                     SkipReason = skipReason,
                 });
 
-                if (skipReason == null
-                    && !string.IsNullOrEmpty(fullPath)
-                    && Path.GetExtension(fullPath).Equals(".CATProduct", StringComparison.OrdinalIgnoreCase))
+                // Recurse into ANY node that aggregates children (a sub-
+                // assembly), regardless of its own skip status — except
+                // suppressed nodes, which the user deliberately turned off.
+                // This is the fix for "sub-assembly children not extracted".
+                if (hasChildren && skipReason != "suppressed")
                 {
-                    Product nested = null;
-                    try { nested = child.ReferenceProduct; } catch { }
-                    if (nested != null) WalkProductTree(nested, childPn, output, seenPaths);
+                    LogWalk($"  child[{i}]: recursing into sub-assembly '{displayName}'");
+                    WalkProductTree(child, childPn, output, seenPaths);
                 }
             }
+        }
+
+        // A Product node is a sub-assembly iff it aggregates child Products.
+        // Leaf CATParts return 0. Robust across CATIA versions — no dependency
+        // on ReferenceProduct or file-path resolution, which is exactly why we
+        // use it to gate recursion instead of the old extension check.
+        private static bool ProductHasChildren(Product p)
+        {
+            try
+            {
+                Products kids = p.Products;
+                return kids != null && kids.Count > 0;
+            }
+            catch { return false; }
         }
 
         private static string TryGetChildPath(Product child)
