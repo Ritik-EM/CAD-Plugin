@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using AtlasCadCore.Adapter;
 using AtlasCadCore.Utility;
 using INFITF;
@@ -136,12 +137,15 @@ namespace AtlasCadPlugin.Catia
                 string fullPath = TryGetChildPath(child);
                 string childFilename = string.IsNullOrEmpty(fullPath) ? null : Path.GetFileName(fullPath);
 
-                // V5R21 doesn't expose Product.IsActivated, so we can't
-                // explicitly tag suppressed children. They show up as
-                // "no-path" or "missing-file" instead, which is fine for the
-                // upload form's filter.
+                // Suppression detection: V5R21 doesn't expose IsActivated on
+                // Product so the reflection helper returns null there → we
+                // skip the check. V5R2025+ exposes it → suppressed components
+                // get tagged explicitly. Either way, no-path/missing-file
+                // catch components the filter would have dropped anyway.
                 string skipReason = null;
-                if (string.IsNullOrEmpty(fullPath)) skipReason = "no-path";
+                bool? activated = TryReadBoolProp(child, "IsActivated");
+                if (activated == false) skipReason = "suppressed";
+                else if (string.IsNullOrEmpty(fullPath)) skipReason = "no-path";
                 else if (!System.IO.File.Exists(fullPath)) skipReason = "missing-file";
 
                 if (skipReason == null && !seenPaths.Add(fullPath))
@@ -157,7 +161,7 @@ namespace AtlasCadPlugin.Catia
                 string displayName = childFilename;
                 if (string.IsNullOrEmpty(displayName))
                 {
-                    try { displayName = child.get_Name(); } catch { }
+                    try { displayName = ProductName(child); } catch { }
                     if (string.IsNullOrEmpty(displayName)) displayName = "(unnamed component)";
                 }
 
@@ -231,7 +235,7 @@ namespace AtlasCadPlugin.Catia
             // can't tell parts from products from the API.
             try
             {
-                string desc = child.get_DescriptionInst();
+                string desc = ProductDescriptionInst(child);
                 if (!string.IsNullOrEmpty(desc))
                 {
                     string ext = Path.GetExtension(desc).ToLowerInvariant();
@@ -247,7 +251,7 @@ namespace AtlasCadPlugin.Catia
             // but happens when the user manually re-named a broken node.
             try
             {
-                string name = child.get_Name();
+                string name = ProductName(child);
                 if (!string.IsNullOrEmpty(name))
                 {
                     var m = System.Text.RegularExpressions.Regex.Match(
@@ -263,7 +267,7 @@ namespace AtlasCadPlugin.Catia
             // V5R21 PartNumber is usually empty, but try anyway.
             try
             {
-                string pn = child.get_PartNumber();
+                string pn = ProductPartNumber(child);
                 if (!string.IsNullOrEmpty(pn))
                     return pn + ".CATPart";
             }
@@ -351,7 +355,7 @@ namespace AtlasCadPlugin.Catia
 
             // R21 generates Document.Name as get_Name()/set_Name(ref string)
             // — newer CATIA versions wrap it as a clean property accessor.
-            string actualName = imported.get_Name();
+            string actualName = DocumentName(imported);
             string outPath = Path.Combine(
                 Path.GetDirectoryName(nativeOutPathHint),
                 Path.GetFileNameWithoutExtension(nativeOutPathHint) + Path.GetExtension(actualName));
@@ -413,7 +417,7 @@ namespace AtlasCadPlugin.Catia
                     string full = null;
                     string nm = null;
                     try { full = doc.FullName; } catch { }
-                    try { nm = doc.get_Name(); } catch { }
+                    try { nm = DocumentName(doc); } catch { }
                     LogResolve($"  Documents[{i}]: Name={nm} FullName={full}");
 
                     if (string.IsNullOrEmpty(full)) continue;
@@ -473,10 +477,10 @@ namespace AtlasCadPlugin.Catia
                 if (child == null) { LogResolve($"  children.Item({i}) = null"); continue; }
 
                 string cName = null, cPn = null, cDesc = null, cNom = null;
-                try { cName = child.get_Name(); } catch { }
-                try { cPn = child.get_PartNumber(); } catch { }
-                try { cDesc = child.get_DescriptionInst(); } catch { }
-                try { cNom = child.get_Nomenclature(); } catch { }
+                try { cName = ProductName(child); } catch { }
+                try { cPn = ProductPartNumber(child); } catch { }
+                try { cDesc = ProductDescriptionInst(child); } catch { }
+                try { cNom = ProductNomenclature(child); } catch { }
                 LogResolve($"  child[{i}]: Name='{cName}' PN='{cPn}' DescInst='{cDesc}' Nomenclature='{cNom}'");
 
                 Product refProd = null;
@@ -484,7 +488,7 @@ namespace AtlasCadPlugin.Catia
                 if (refProd != null)
                 {
                     string rpName = null;
-                    try { rpName = refProd.get_Name(); } catch { }
+                    try { rpName = ProductName(refProd); } catch { }
                     Document rpParent = null;
                     try { rpParent = refProd.Parent as Document; } catch (Exception ex) { LogResolve($"    .ReferenceProduct.Parent threw: {ex.Message}"); }
                     string rpFull = null;
@@ -656,5 +660,93 @@ namespace AtlasCadPlugin.Catia
             }
             catch { }
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Version-agnostic COM property accessors (P7.53)
+        //
+        // Built against V5R21 Interop, code calls `obj.get_Name()` because R21's
+        // typelib declared Name with [in, out] BSTR* — Interop generated a
+        // method pair, not a property. R2025's typelib cleaned this up; the same
+        // Interop call may not exist or may be named differently.
+        //
+        // CATIA's COM contracts (vtable slots, IIDs) are stable across versions;
+        // only the .NET wrapper differs. These helpers reflect over whichever
+        // wrapper shape is present, so the SAME compiled DLL runs against
+        // either Interop / either CATIA version.
+        //
+        // Reflection cost is one-time-per-call lookup. Negligible compared to
+        // the COM call itself (~ms).
+        // ─────────────────────────────────────────────────────────────────────
+
+        private static string ReadStringProp(object target, string propName)
+        {
+            if (target == null) return null;
+            Type t = target.GetType();
+            // Try clean property accessor first (R2025 shape)
+            try
+            {
+                PropertyInfo pi = t.GetProperty(propName,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                if (pi != null && pi.CanRead)
+                    return pi.GetValue(target, null) as string;
+            }
+            catch { }
+            // Fall back to get_X() method (R21 shape)
+            try
+            {
+                MethodInfo mi = t.GetMethod("get_" + propName,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase,
+                    binder: null, types: Type.EmptyTypes, modifiers: null);
+                if (mi != null)
+                    return mi.Invoke(target, null) as string;
+            }
+            catch { }
+            // Last resort: IDispatch via InvokeMember (works on any COM object
+            // that supports automation, regardless of typelib generation).
+            try
+            {
+                return t.InvokeMember(propName,
+                    BindingFlags.GetProperty | BindingFlags.Instance | BindingFlags.Public,
+                    null, target, null) as string;
+            }
+            catch { }
+            return null;
+        }
+
+        private static bool? TryReadBoolProp(object target, string propName)
+        {
+            if (target == null) return null;
+            Type t = target.GetType();
+            try
+            {
+                PropertyInfo pi = t.GetProperty(propName,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                if (pi != null && pi.CanRead)
+                {
+                    object v = pi.GetValue(target, null);
+                    if (v is bool b) return b;
+                }
+            }
+            catch { }
+            try
+            {
+                MethodInfo mi = t.GetMethod("get_" + propName,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase,
+                    binder: null, types: Type.EmptyTypes, modifiers: null);
+                if (mi != null)
+                {
+                    object v = mi.Invoke(target, null);
+                    if (v is bool b) return b;
+                }
+            }
+            catch { }
+            return null; // property doesn't exist on this CATIA version
+        }
+
+        private static string ProductName(Product p)        => ReadStringProp(p, "Name");
+        private static string ProductPartNumber(Product p)  => ReadStringProp(p, "PartNumber");
+        private static string ProductDescriptionInst(Product p) => ReadStringProp(p, "DescriptionInst");
+        private static string ProductNomenclature(Product p) => ReadStringProp(p, "Nomenclature");
+        private static string DocumentName(Document d)      => ReadStringProp(d, "Name");
     }
 }
