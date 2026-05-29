@@ -14,7 +14,7 @@ namespace AtlasCadPlugin.Catia
 {
     public class CatiaAdapter : ICadAdapter
     {
-        public const string WalkAssemblyVersion = "2026-05-29-structural-recursion-v2";
+        public const string WalkAssemblyVersion = "2026-05-29-design-mode-v3";
 
         private readonly Application _catApp;
 
@@ -109,8 +109,68 @@ namespace AtlasCadPlugin.Catia
             seenPaths.Add(rootPath);
 
             var productDoc = (ProductDocument)catDoc;
+
+            // CRITICAL: force the whole tree into Design Mode first. When CATIA's
+            // cache system / Visualization Mode is on, leaf CATParts are loaded
+            // only as lightweight .cgr representations — there is no real part
+            // Document in the session, so Product.ReferenceProduct throws E_FAIL
+            // and we can't resolve their file paths. That made every leaf part
+            // come back path='' → skipped from the upload → "file not found" on
+            // checkout. Design Mode loads the real parts so paths resolve.
+            EnsureDesignMode(productDoc.Product);
+
             WalkProductTree(productDoc.Product, rootPn, result, seenPaths);
             return result;
+        }
+
+        // Loads every component of the tree as a real (design-mode) Document.
+        // Idempotent and best-effort: if a component's file is genuinely missing
+        // it simply stays unresolved and is reported as missing downstream.
+        //
+        // Invoked entirely by reflection — same philosophy as the version-
+        // agnostic accessors below. ApplyWorkMode is resolved by name (so a
+        // differing wrapper shape can't break the build) and DESIGN_MODE is read
+        // by name from whichever ProductStructureTypeLib interop is loaded (so
+        // the enum's underlying int value, which varies by CATIA release, never
+        // has to be hardcoded).
+        private static void EnsureDesignMode(Product root)
+        {
+            if (root == null) return;
+            try
+            {
+                object designMode = ResolveWorkModeValue("DESIGN_MODE");
+                if (designMode == null)
+                {
+                    LogWalk("EnsureDesignMode: could not resolve CatWorkModeType.DESIGN_MODE");
+                    return;
+                }
+                int designModeInt = Convert.ToInt32(designMode);
+                root.GetType().InvokeMember(
+                    "ApplyWorkMode",
+                    BindingFlags.InvokeMethod | BindingFlags.Instance | BindingFlags.Public,
+                    null, root, new object[] { designModeInt });
+                LogWalk($"EnsureDesignMode: ApplyWorkMode(DESIGN_MODE={designModeInt}) applied");
+            }
+            catch (Exception ex)
+            {
+                LogWalk($"EnsureDesignMode: ApplyWorkMode threw: {ex.Message}");
+            }
+        }
+
+        private static object ResolveWorkModeValue(string memberName)
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type t = null;
+                try { t = asm.GetType("ProductStructureTypeLib.CatWorkModeType"); }
+                catch { }
+                if (t == null) { try { t = asm.GetType("CatWorkModeType"); } catch { } }
+                if (t != null && t.IsEnum)
+                {
+                    try { return Enum.Parse(t, memberName); } catch { }
+                }
+            }
+            return null;
         }
 
         // Walks the Product tree depth-first. The KEY parity fix vs. the old
@@ -446,6 +506,11 @@ namespace AtlasCadPlugin.Catia
             var productDoc = catDoc as ProductDocument;
             if (productDoc != null)
             {
+                // Same Design-Mode load as WalkAssembly: without it, cache /
+                // Visualization-mode leaf parts have no real Document and
+                // Product.ReferenceProduct throws E_FAIL, so we can neither
+                // resolve their paths nor tell present-on-disk from missing.
+                EnsureDesignMode(productDoc.Product);
                 CollectMissingChildren(productDoc.Product, assemblyDir, result, seen);
                 LogResolve($"After Product tree walk: {result.Count} missing detected");
             }
