@@ -483,6 +483,14 @@ namespace AtlasCadPlugin.Catia
                 try { cNom = ProductNomenclature(child); } catch { }
                 LogResolve($"  child[{i}]: Name='{cName}' PN='{cPn}' DescInst='{cDesc}' Nomenclature='{cNom}'");
 
+                // R2025 probe: enumerate every candidate property name that
+                // might hold the recorded filename / link path for a broken
+                // child. ReferenceProduct throws E_FAIL on both R21 and
+                // R2025, but on R2025 DescriptionInst is empty too — so the
+                // filename must be elsewhere. Run only for child[1] to keep
+                // logs small.
+                if (i == 1) ProbeChildProperties(child);
+
                 Product refProd = null;
                 try { refProd = child.ReferenceProduct; } catch (Exception ex) { LogResolve($"    .ReferenceProduct threw: {ex.Message}"); }
                 if (refProd != null)
@@ -741,6 +749,76 @@ namespace AtlasCadPlugin.Catia
             }
             catch { }
             return null; // property doesn't exist on this CATIA version
+        }
+
+        // P7.56 R2025 broken-ref filename probe. The log from P7.53/45 showed
+        // R2025 returns the alias in Product.Name and leaves DescriptionInst
+        // empty, but the tree displays the recorded filename in brackets —
+        // so it IS exposed via some property; we just don't know its name.
+        // This probe enumerates EVERY type member + a list of candidate
+        // property names and logs whatever we find. One-time diagnostic;
+        // strip once we identify the right property.
+        private static readonly string[] ProbePropertyNames = new[]
+        {
+            // Already-known
+            "Name", "PartNumber", "DescriptionInst", "DescriptionRef", "Nomenclature",
+            // Common R2025 candidates
+            "ReferenceProductLink", "ReferenceFile", "ReferenceFileName", "ReferencePath",
+            "LinkedDocument", "LinkedDocumentName", "LinkPath", "LinkedFile",
+            "OriginalProduct", "OriginalFile", "OriginalName", "OriginalPath",
+            "Source", "SourceFile", "SourcePath", "DocumentPath", "DocumentName",
+            "FileName", "FilePath", "FullName", "PathName", "Path",
+            "InstanceName", "InstancePartNumber", "InstancePath",
+            "DocReference", "DocumentReference", "DocumentLink",
+            "MasterShapeRepresentation", "RepresentationLink",
+            "Definition", "ReferenceDoc", "ReferenceDocName", "ReferenceDocFullName",
+        };
+
+        private static void ProbeChildProperties(Product child)
+        {
+            if (child == null) return;
+            try
+            {
+                Type t = child.GetType();
+                LogResolve($"  PROBE: COM type = {t.FullName}");
+
+                // Enumerate every reflection-visible property + method that
+                // returns a string and takes no args. Often the COM RCW
+                // doesn't expose much here, but it's free data if it does.
+                foreach (var pi in t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    if (pi.PropertyType != typeof(string) || !pi.CanRead) continue;
+                    string val = null;
+                    try { val = pi.GetValue(child, null) as string; } catch (Exception ex) { LogResolve($"    PROBE prop {pi.Name} threw: {ex.Message}"); continue; }
+                    LogResolve($"    PROBE prop {pi.Name} = '{val}'");
+                }
+                foreach (var mi in t.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    if (mi.ReturnType != typeof(string)) continue;
+                    if (mi.GetParameters().Length != 0) continue;
+                    if (!mi.Name.StartsWith("get_")) continue;
+                    string val = null;
+                    try { val = mi.Invoke(child, null) as string; } catch (Exception ex) { LogResolve($"    PROBE method {mi.Name} threw: {ex.Message}"); continue; }
+                    LogResolve($"    PROBE method {mi.Name} = '{val}'");
+                }
+
+                // Try IDispatch by-name invocation for every candidate.
+                foreach (var name in ProbePropertyNames)
+                {
+                    try
+                    {
+                        object v = t.InvokeMember(name,
+                            BindingFlags.GetProperty | BindingFlags.Instance | BindingFlags.Public,
+                            null, child, null);
+                        if (v != null) LogResolve($"    PROBE IDispatch {name} = '{v}' (type {v.GetType().Name})");
+                    }
+                    catch { /* property doesn't exist — silent */ }
+                }
+            }
+            catch (Exception ex)
+            {
+                LogResolve($"  PROBE outer threw: {ex.Message}");
+            }
         }
 
         private static string ProductName(Product p)        => ReadStringProp(p, "Name");
