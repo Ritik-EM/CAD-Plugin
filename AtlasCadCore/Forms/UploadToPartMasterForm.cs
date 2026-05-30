@@ -50,6 +50,12 @@ namespace AtlasCadCore.Forms
             using (var progress = new ProgressForm("Atlas — Upload to Part Master"))
             {
                 progress.Show();
+                // Paint a marquee "working" indicator immediately — the CATIA
+                // calls below (design-mode load, walk) run synchronously on the
+                // UI thread, so without an up-front phase the window would sit
+                // blank until they finish. SetPhase pumps the message loop so
+                // the loader is visible (and animates) through the wait.
+                progress.SetPhase("Saving document…");
                 string stepDir = null;
                 try
                 {
@@ -63,6 +69,7 @@ namespace AtlasCadCore.Forms
                         // user can attach them (Browse local OR Pick from Atlas)
                         // before we walk. Otherwise the walk silently drops
                         // them as SkipReason=missing-file.
+                        progress.SetPhase("Checking assembly references… (loading parts)");
                         var missing = adapter.FindMissingComponents(doc) ?? new List<MissingComponent>();
                         if (missing.Count > 0)
                         {

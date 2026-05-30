@@ -41,7 +41,18 @@ namespace AtlasCadCore.Forms
                 return;
             }
 
-            var missing = adapter.FindMissingComponents(doc) ?? new List<MissingComponent>();
+            // FindMissingComponents now forces a design-mode load (so cache /
+            // visualization parts resolve), which can take a few seconds on a
+            // large assembly. Show a marquee loader around it so the user isn't
+            // staring at a frozen window before the resolve prompt appears.
+            List<MissingComponent> missing;
+            using (var checkProgress = new ProgressForm("Atlas — Checking child references"))
+            {
+                checkProgress.Show();
+                checkProgress.SetPhase("Checking for missing child files… (loading parts)");
+                missing = adapter.FindMissingComponents(doc) ?? new List<MissingComponent>();
+                checkProgress.Done();
+            }
             if (missing.Count == 0)
             {
                 if (!silentIfNothingMissing)
