@@ -12,8 +12,12 @@ namespace AtlasCadCore.Forms
 {
     public static class UploadToPartMasterForm
     {
+        // Bump when the upload flow changes so the log confirms which build is live.
+        public const string UploadFlowVersion = "2026-05-30-perpart-prompt-v1";
+
         public static async Task RunAsync(AtlasApiClient api, ICadAdapter adapter)
         {
+            Log($"RunAsync v={UploadFlowVersion}");
             CadDocument doc = adapter.GetActiveDocument();
             if (doc == null)
             {
@@ -89,6 +93,12 @@ namespace AtlasCadCore.Forms
                                         && !string.IsNullOrEmpty(n.FullPath)
                                         && File.Exists(n.FullPath))
                             .ToList();
+
+                        Log($"walked={walked.Count} validNative={native.Count} needsPartNumber={needsPartNumber.Count}");
+                        foreach (var n in walked)
+                            Log($"  walked: file='{n.Filename}' pn='{n.PartNumber}' skip='{n.SkipReason ?? "(none)"}' " +
+                                $"exists={(!string.IsNullOrEmpty(n.FullPath) && File.Exists(n.FullPath))}");
+
                         if (needsPartNumber.Count > 0)
                         {
                             progress.Hide();
@@ -283,6 +293,22 @@ namespace AtlasCadCore.Forms
                 }
             }
             return assigned;
+        }
+
+        // Diagnostics → %AppData%\AtlasCad\walk_assembly.log (same file the
+        // adapters write to, so the whole upload story is in one place).
+        private static void Log(string line)
+        {
+            try
+            {
+                string logDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AtlasCad");
+                Directory.CreateDirectory(logDir);
+                File.AppendAllText(
+                    Path.Combine(logDir, "walk_assembly.log"),
+                    $"--- {DateTime.Now:O} UploadToPartMaster.{line}\n");
+            }
+            catch { /* logging must never break the upload */ }
         }
 
         private static void EnsurePlaceholderPartNumbers(List<AssemblyFileRef> entries)

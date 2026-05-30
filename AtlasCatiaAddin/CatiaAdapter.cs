@@ -254,6 +254,9 @@ namespace AtlasCadPlugin.Catia
                 if (skipReason == null && string.IsNullOrEmpty(childPn))
                     skipReason = "no-part-number";
 
+                LogWalk($"  child[{i}]: -> resolvedPN='{childPn}' skipReason='{skipReason ?? "(none)"}' " +
+                        $"fileExists={(!string.IsNullOrEmpty(fullPath) && System.IO.File.Exists(fullPath))}");
+
                 string displayName = childFilename;
                 if (string.IsNullOrEmpty(displayName))
                 {
