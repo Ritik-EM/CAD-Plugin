@@ -143,9 +143,19 @@ namespace AtlasCadCore.Forms
                     EnsurePlaceholderPartNumbers(native);
 
                     stepDir = Path.Combine(Path.GetTempPath(), "AtlasCadStep_" + Guid.NewGuid().ToString("N"));
-                    progress.SetPhase("Exporting STEP files…", 0, native.Count);
+                    // One STEP per part_number — repeated parts (CATIA _1/_2/_3
+                    // copies) share a part_number and only the canonical native
+                    // gets a STEP; exporting one per physical copy is wasted CATIA
+                    // round-trips. (native still carries every copy for hashing /
+                    // companion upload / the tree manifest.)
+                    var stepInputs = native
+                        .Where(n => !string.IsNullOrEmpty(n.PartNumber))
+                        .GroupBy(n => n.PartNumber, StringComparer.OrdinalIgnoreCase)
+                        .Select(g => g.First())
+                        .ToList();
+                    progress.SetPhase("Exporting STEP files…", 0, stepInputs.Count);
                     var steps = adapter.ExportStep(
-                        doc, native, stepDir,
+                        doc, stepInputs, stepDir,
                         progress: (cur, total, filename) =>
                             progress.SetPhase($"Exporting STEP {cur}/{total}: {filename}", cur, total)
                     ) ?? new List<AssemblyFileRef>();
@@ -473,20 +483,42 @@ namespace AtlasCadCore.Forms
                 .ToDictionary(g => g.Key, g => g.First());
 
             var result = new List<PartEntry>();
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var byPart = new Dictionary<string, PartEntry>(StringComparer.OrdinalIgnoreCase);
             foreach (var n in native)
             {
-                if (string.IsNullOrEmpty(n.PartNumber) || !seen.Add(n.PartNumber)) continue;
-                AssemblyFileRef step = stepByPart.TryGetValue(n.PartNumber, out var s) ? s : null;
-                result.Add(new PartEntry
+                if (string.IsNullOrEmpty(n.PartNumber)) continue;
+                if (!byPart.TryGetValue(n.PartNumber, out var entry))
                 {
-                    PartNumber = n.PartNumber,
-                    NativeFilename = n.Filename,
-                    NativePath = n.FullPath,
-                    StepFilename = step?.Filename,
-                    StepPath = step?.FullPath,
-                    DetectedDescription = null,
-                });
+                    // First file for this part_number is the canonical native
+                    // (becomes reference_documents.3d_raw — one per part).
+                    AssemblyFileRef step = stepByPart.TryGetValue(n.PartNumber, out var s) ? s : null;
+                    entry = new PartEntry
+                    {
+                        PartNumber = n.PartNumber,
+                        NativeFilename = n.Filename,
+                        NativePath = n.FullPath,
+                        StepFilename = step?.Filename,
+                        StepPath = step?.FullPath,
+                        DetectedDescription = null,
+                    };
+                    byPart[n.PartNumber] = entry;
+                    result.Add(entry);
+                }
+                else
+                {
+                    // Additional DISTINCT physical file sharing this part_number
+                    // (CATIA stores repeated parts as _1/_2/_3 copies, each a
+                    // separate document with its own internal UUID). Keep it as a
+                    // companion so checkout can restore the byte-exact original —
+                    // CATIA rejects a mere copy of the canonical as "wrong
+                    // information". The part LIBRARY still keeps one canonical
+                    // native; companions are stored alongside under the part.
+                    if (string.IsNullOrEmpty(n.Filename) || string.IsNullOrEmpty(n.FullPath)) continue;
+                    if (string.Equals(n.Filename, entry.NativeFilename, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (entry.CompanionFilenames.Any(f => string.Equals(f, n.Filename, StringComparison.OrdinalIgnoreCase))) continue;
+                    entry.CompanionFilenames.Add(n.Filename);
+                    entry.CompanionPaths.Add(n.FullPath);
+                }
             }
             return result;
         }
@@ -501,6 +533,11 @@ namespace AtlasCadCore.Forms
             // Set only for assembly entries. See AttachTreeManifests.
             public string TreeFilename;
             public string TreePath;
+            // Extra distinct files sharing this part_number (CATIA _1/_2/_3
+            // copies). Stored alongside the canonical so checkout restores each
+            // byte-exact. Parallel lists: filename[i] ↔ path[i].
+            public List<string> CompanionFilenames = new List<string>();
+            public List<string> CompanionPaths = new List<string>();
             public string DetectedDescription;
 
             public object ToUploadJson() => new
@@ -509,6 +546,7 @@ namespace AtlasCadCore.Forms
                 filename = NativeFilename,
                 step_filename = StepFilename,
                 tree_filename = TreeFilename,
+                companion_filenames = CompanionFilenames,
                 detected_description = DetectedDescription,
             };
 
@@ -517,6 +555,8 @@ namespace AtlasCadCore.Forms
                 if (!string.IsNullOrEmpty(NativePath)) yield return NativePath;
                 if (!string.IsNullOrEmpty(StepPath)) yield return StepPath;
                 if (!string.IsNullOrEmpty(TreePath)) yield return TreePath;
+                foreach (var p in CompanionPaths)
+                    if (!string.IsNullOrEmpty(p)) yield return p;
             }
 
             public PartEntry WithPartNumber(string newPn) => new PartEntry
@@ -528,6 +568,8 @@ namespace AtlasCadCore.Forms
                 StepPath = StepPath,
                 TreeFilename = TreeFilename,
                 TreePath = TreePath,
+                CompanionFilenames = CompanionFilenames,
+                CompanionPaths = CompanionPaths,
                 DetectedDescription = DetectedDescription,
             };
         }

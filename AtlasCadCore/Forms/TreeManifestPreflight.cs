@@ -173,50 +173,79 @@ namespace AtlasCadCore.Forms
                     $"inAtlas={(childRev != null ? "yes" : "NO")} hasNative={(hasNative ? "yes" : "NO")} " +
                     $"3d_raw='{childRev?.EffectiveRefs?.Native3dRaw ?? "(none)"}'");
 
-                if (missingNames.Count > 0)
+                // Companion files live next to the canonical native under the
+                // same part prefix: cad/part-master/<pn>/<filename>. CATIA links
+                // each instance by internal UUID, so every referenced file must
+                // be the BYTE-EXACT original — a copy of the canonical is
+                // rejected as "wrong information". So we download each alias from
+                // its OWN key, and only clone the canonical as a last resort for
+                // assemblies uploaded before companions were stored.
+                string canonicalKey = childRev?.EffectiveRefs?.Native3dRaw;
+                string keyPrefix = null;
+                if (!string.IsNullOrEmpty(canonicalKey))
                 {
-                    // Source for the copies: an alias already on disk, else
-                    // download the native once into the first missing name.
-                    string sourcePath = aliasNames
-                        .Select(f => Path.Combine(assemblyDir, f))
-                        .FirstOrDefault(File.Exists);
+                    int slash = canonicalKey.LastIndexOf('/');
+                    if (slash >= 0) keyPrefix = canonicalKey.Substring(0, slash + 1);
+                }
+                string canonicalName = string.IsNullOrEmpty(canonicalKey) ? null : Path.GetFileName(canonicalKey);
+                string canonicalPath = canonicalName != null ? Path.Combine(assemblyDir, canonicalName) : null;
 
-                    if (sourcePath == null && hasNative)
+                // 1) Ensure the canonical native is on disk (download from its key).
+                if (canonicalPath != null && hasNative && !File.Exists(canonicalPath))
+                {
+                    try
                     {
+                        string url = await api.GetS3DownloadUrlAsync(canonicalKey);
+                        Directory.CreateDirectory(Path.GetDirectoryName(canonicalPath));
+                        await api.DownloadFileAsync(url, canonicalPath);
+                        result.Downloaded++;
+                        Log($"      downloaded canonical '{canonicalName}'");
+                    }
+                    catch (Exception ex) { Log($"      canonical download FAILED for '{node.part_number}': {ex.Message}"); }
+                }
+
+                // 2) Materialise every referenced filename, byte-exact where
+                //    possible (its own companion key), cloning the canonical
+                //    only as a legacy fallback.
+                foreach (var name in aliasNames)
+                {
+                    string dest = Path.Combine(assemblyDir, name);
+                    if (File.Exists(dest)) continue;
+
+                    bool got = false;
+                    if (keyPrefix != null)
+                    {
+                        string key = keyPrefix + name;
                         try
                         {
-                            string url = await api.GetS3DownloadUrlAsync(childRev.EffectiveRefs.Native3dRaw);
-                            sourcePath = Path.Combine(assemblyDir, missingNames[0]);
-                            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath));
-                            await api.DownloadFileAsync(url, sourcePath);
+                            string url = await api.GetS3DownloadUrlAsync(key);
+                            Directory.CreateDirectory(Path.GetDirectoryName(dest));
+                            await api.DownloadFileAsync(url, dest);
                             result.Downloaded++;
-                            Log($"      downloaded '{missingNames[0]}'");
-                            missingNames.RemoveAt(0);
+                            got = true;
+                            Log($"      downloaded '{name}'");
                         }
-                        catch (Exception ex) { sourcePath = null; Log($"      download FAILED for '{node.part_number}': {ex.Message}"); }
+                        catch (Exception ex) { Log($"      companion miss '{name}' (key='{key}'): {ex.Message}"); }
                     }
 
-                    if (sourcePath != null)
+                    if (!got && canonicalPath != null && File.Exists(canonicalPath))
                     {
-                        // Fan the native out to every remaining referenced name.
-                        foreach (var name in missingNames)
+                        // Legacy fallback: no companion stored. Clone the
+                        // canonical so the file at least exists — CATIA may still
+                        // flag "wrong information" until the assembly is re-uploaded.
+                        try
                         {
-                            try
-                            {
-                                string dest = Path.Combine(assemblyDir, name);
-                                if (File.Exists(dest)) continue;
-                                Directory.CreateDirectory(Path.GetDirectoryName(dest));
-                                File.Copy(sourcePath, dest, overwrite: false);
-                                result.Downloaded++;
-                            }
-                            catch { /* per-copy failure non-fatal */ }
+                            Directory.CreateDirectory(Path.GetDirectoryName(dest));
+                            File.Copy(canonicalPath, dest, overwrite: false);
+                            result.Downloaded++;
+                            Log($"      cloned '{name}' from canonical (no companion on server — re-upload to fix)");
                         }
+                        catch (Exception ex) { Log($"      clone FAILED '{name}': {ex.Message}"); }
                     }
-                    else if (!hasNative)
+                    else if (!got && !hasNative)
                     {
-                        // No native in Atlas AND not already on disk → the user
-                        // must upload this part. Record it (deduped) for the
-                        // post-open report.
+                        // No native in Atlas at all → the user must upload this
+                        // part. Record it (deduped) for the post-open report.
                         if (seenMissing.Add(node.part_number))
                             result.Missing.Add(new NeedsUpload
                             {
