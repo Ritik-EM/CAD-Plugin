@@ -186,10 +186,20 @@ namespace AtlasCadCore.Forms
                     progress.SetPhase("Resolving part_numbers against atlas…");
                     byPart = await ResolveAgainstAtlasAsync(api, byPart);
 
+                    LogUpload($"========== UPLOAD START: root='{doc.FullPath}' parts={byPart.Count} ==========");
+                    foreach (var e in byPart)
+                    {
+                        LogUpload($"  pn='{e.PartNumber}' native='{e.NativeFilename ?? "-"}' step='{e.StepFilename ?? "-"}' " +
+                                  $"tree='{e.TreeFilename ?? "-"}' companions=[{string.Join(", ", e.CompanionFilenames)}]");
+                        foreach (var p in e.AllPaths())
+                            LogUpload($"      file exists={File.Exists(p)} '{p}'");
+                    }
+
                     progress.SetPhase($"Uploading {all.Count} files…");
                     var firstPass = await api.UploadPartMasterAsync(
                         tree: byPart.Select(e => (object)e.ToUploadJson()),
                         filePaths: byPart.SelectMany(e => e.AllPaths()));
+                    LogUploadResult("first-pass", firstPass);
 
                     int attachedFirst = firstPass.attached?.Count ?? 0;
                     var stillMissing = firstPass.missing_parts ?? new List<MissingPartDto>();
@@ -234,6 +244,7 @@ namespace AtlasCadCore.Forms
                             var pass = await api.UploadPartMasterAsync(
                                 tree: subset.Select(e => (object)e.ToUploadJson()),
                                 filePaths: subset.SelectMany(e => e.AllPaths()));
+                            LogUploadResult("picked-existing", pass);
                             attachedFromPickedExisting = pass?.attached?.Count ?? 0;
                         }
                     }
@@ -331,6 +342,38 @@ namespace AtlasCadCore.Forms
                     $"--- {DateTime.Now:O} UploadToPartMaster.{line}\n");
             }
             catch { /* logging must never break the upload */ }
+        }
+
+        // Upload-transaction diagnostics → %AppData%\AtlasCad\upload.log: the
+        // exact payload we ship (per part: native / step / tree / companions)
+        // and what atlas accepted vs. refused. Pairs with preflight.log on the
+        // checkout side for an end-to-end picture.
+        private static void LogUpload(string line)
+        {
+            try
+            {
+                string logDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AtlasCad");
+                Directory.CreateDirectory(logDir);
+                File.AppendAllText(
+                    Path.Combine(logDir, "upload.log"),
+                    $"--- {DateTime.Now:O} {line}\n");
+            }
+            catch { /* logging must never break the upload */ }
+        }
+
+        private static void LogUploadResult(string pass, UploadResultDto r)
+        {
+            if (r == null) { LogUpload($"=== RESULT ({pass}): null response ==="); return; }
+            LogUpload($"=== RESULT ({pass}): attached={r.attached?.Count ?? 0} missing={r.missing_parts?.Count ?? 0} ===");
+            foreach (var a in r.attached ?? new List<UploadAttachedDto>())
+            {
+                var rd = a.reference_documents;
+                LogUpload($"  attached pn='{a.part_number}' 3d_raw='{rd?.Native3dRaw ?? "-"}' " +
+                          $"3d='{rd?.Step3d ?? "-"}' 2d='{rd?.Drawing2d ?? "-"}' tree='{rd?.TreeJson ?? "-"}'");
+            }
+            foreach (var m in r.missing_parts ?? new List<MissingPartDto>())
+                LogUpload($"  MISSING (not released on atlas) pn='{m.part_number}' file='{m.filename ?? "-"}'");
         }
 
         private static void EnsurePlaceholderPartNumbers(List<AssemblyFileRef> entries)

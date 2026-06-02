@@ -203,16 +203,45 @@ namespace AtlasCadCore.ApiClient
                 string filename = Path.GetFileName(path);
                 if (!byName.ContainsKey(filename)) byName[filename] = path;
             }
+            LogUpload($"=== STAGE ({operation}): {byName.Count} unique file(s) to S3 ===");
+            foreach (var kv in byName)
+            {
+                long size = -1; try { size = new FileInfo(kv.Value).Length; } catch { }
+                LogUpload($"  stage '{kv.Key}' size={size}B");
+            }
+
             var presign = await PresignUploadAsync(byName.Keys.ToList());
             if (presign?.uploads == null)
                 throw new InvalidOperationException($"{operation}: presign returned no upload slots");
+            LogUpload($"  presign session={presign.session_id} slots={presign.uploads.Count}");
 
             var puts = presign.uploads
                 .Where(u => !string.IsNullOrEmpty(u.presigned_url) && byName.ContainsKey(u.filename))
-                .Select(u => PutFileToS3Async(u.presigned_url, byName[u.filename]))
+                .Select(async u =>
+                {
+                    try { await PutFileToS3Async(u.presigned_url, byName[u.filename]); LogUpload($"  PUT ok  '{u.filename}' -> {u.s3_key}"); }
+                    catch (Exception ex) { LogUpload($"  PUT FAIL '{u.filename}': {ex.Message}"); throw; }
+                })
                 .ToList();
             await Task.WhenAll(puts);
+            LogUpload($"  staged {puts.Count} file(s) under session {presign.session_id}");
             return presign.session_id;
+        }
+
+        // Mirrors UploadToPartMasterForm.LogUpload — same %AppData%\AtlasCad\upload.log
+        // so the staging (S3 PUT) detail sits inline with the upload payload/result.
+        private static void LogUpload(string line)
+        {
+            try
+            {
+                string logDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AtlasCad");
+                Directory.CreateDirectory(logDir);
+                File.AppendAllText(
+                    Path.Combine(logDir, "upload.log"),
+                    $"--- {DateTime.Now:O} ApiClient.{line}\n");
+            }
+            catch { /* logging must never break the upload */ }
         }
 
         public async Task<PresignUploadResultDto> PresignUploadAsync(List<string> filenames)
