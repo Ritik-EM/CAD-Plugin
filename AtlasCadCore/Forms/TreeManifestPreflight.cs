@@ -78,8 +78,30 @@ namespace AtlasCadCore.Forms
             var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var seenMissing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var result = new PreflightResult();
+            Log($"Preflight START root='{rootRev?.part_number}' dir='{assemblyDir}' " +
+                $"rootTreeJson='{rootRev?.EffectiveRefs?.TreeJson ?? "(none)"}'");
             await PreflightRevisionAsync(api, rootRev, assemblyDir, visited, seenMissing, result, depth: 0);
+            Log($"Preflight DONE downloaded={result.Downloaded} missing={result.Missing.Count}");
             return result;
+        }
+
+        // Diagnostics → %AppData%\AtlasCad\preflight.log. Mirrors the walk log
+        // so checkout/download is no longer a black box: every per-child
+        // decision (found in atlas? has a native? downloaded / copied / missing)
+        // is recorded, which is the authoritative answer to "is the file
+        // actually on the server, or did the download just fail?".
+        private static void Log(string line)
+        {
+            try
+            {
+                string logDir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AtlasCad");
+                Directory.CreateDirectory(logDir);
+                File.AppendAllText(
+                    Path.Combine(logDir, "preflight.log"),
+                    $"--- {DateTime.Now:O} {line}\n");
+            }
+            catch { /* logging must never break checkout */ }
         }
 
         private static async Task PreflightRevisionAsync(
@@ -93,17 +115,31 @@ namespace AtlasCadCore.Forms
         {
             // Safety: deep CAD trees are usually < 8 levels. 16 caps any
             // pathological case.
-            if (depth > 16) return;
-            if (rev?.EffectiveRefs?.TreeJson == null) return;
-            if (string.IsNullOrEmpty(assemblyDir)) return;
+            if (depth > 16) { Log($"  [{depth}] depth cap hit for '{rev?.part_number}'"); return; }
+            if (rev?.EffectiveRefs?.TreeJson == null)
+            {
+                // No manifest on this revision → can't pre-download anything.
+                // For the ROOT this means the assembly's tree.json was never
+                // stored on the server (so checkout finds nothing).
+                Log($"  [{depth}] '{rev?.part_number}' has NO tree.json on server — nothing to pre-download");
+                return;
+            }
+            if (string.IsNullOrEmpty(assemblyDir)) { Log($"  [{depth}] assemblyDir empty — abort"); return; }
             if (!string.IsNullOrEmpty(rev.part_number) && !visited.Add(rev.part_number)) return;
 
-            var manifest = await api.DownloadJsonByS3KeyAsync<TreeManifest>(rev.EffectiveRefs.TreeJson);
-            if (manifest?.nodes == null || manifest.nodes.Count == 0) return;
+            TreeManifest manifest;
+            try { manifest = await api.DownloadJsonByS3KeyAsync<TreeManifest>(rev.EffectiveRefs.TreeJson); }
+            catch (Exception ex) { Log($"  [{depth}] '{rev.part_number}' tree.json download FAILED: {ex.Message}"); return; }
+            if (manifest?.nodes == null || manifest.nodes.Count == 0)
+            {
+                Log($"  [{depth}] '{rev.part_number}' tree.json has 0 nodes");
+                return;
+            }
 
             var nodes = manifest.nodes
                 .Where(n => !string.IsNullOrEmpty(n.part_number) && !string.IsNullOrEmpty(n.filename))
                 .ToList();
+            Log($"  [{depth}] '{rev.part_number}' manifest: {manifest.nodes.Count} nodes ({nodes.Count} with a filename)");
             if (nodes.Count == 0) return;
 
             foreach (var node in nodes)
@@ -133,6 +169,10 @@ namespace AtlasCadCore.Forms
 
                 bool hasNative = !string.IsNullOrEmpty(childRev?.EffectiveRefs?.Native3dRaw);
 
+                Log($"    node pn='{node.part_number}' aliases={aliasNames.Count} missingOnDisk={missingNames.Count} " +
+                    $"inAtlas={(childRev != null ? "yes" : "NO")} hasNative={(hasNative ? "yes" : "NO")} " +
+                    $"3d_raw='{childRev?.EffectiveRefs?.Native3dRaw ?? "(none)"}'");
+
                 if (missingNames.Count > 0)
                 {
                     // Source for the copies: an alias already on disk, else
@@ -150,9 +190,10 @@ namespace AtlasCadCore.Forms
                             Directory.CreateDirectory(Path.GetDirectoryName(sourcePath));
                             await api.DownloadFileAsync(url, sourcePath);
                             result.Downloaded++;
+                            Log($"      downloaded '{missingNames[0]}'");
                             missingNames.RemoveAt(0);
                         }
-                        catch { sourcePath = null; /* per-child failure non-fatal */ }
+                        catch (Exception ex) { sourcePath = null; Log($"      download FAILED for '{node.part_number}': {ex.Message}"); }
                     }
 
                     if (sourcePath != null)
