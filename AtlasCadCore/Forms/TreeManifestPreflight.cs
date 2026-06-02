@@ -32,6 +32,13 @@ namespace AtlasCadCore.Forms
         {
             public string part_number;
             public string filename;
+            // Every distinct filename this part_number is referenced under in
+            // the assembly. CATIA keeps N physical copies of the same part
+            // (paste/insert → _1/_2/_3 suffixed files); Atlas stores one native
+            // per part_number, so on checkout we download once and copy it to
+            // every name here. Null on legacy manifests → falls back to
+            // [filename].
+            public List<string> filenames;
             public string parent_part_number;
         }
 
@@ -103,40 +110,80 @@ namespace AtlasCadCore.Forms
             {
                 if (visited.Contains(node.part_number)) continue;
 
-                string target = Path.Combine(assemblyDir, node.filename);
-                ApiClient.PartMasterRevisionDto childRev = null;
-                bool needsDownload = !File.Exists(target);
+                // Every filename this part is linked under (legacy manifests
+                // only carry the single `filename`). CATIA keeps repeated parts
+                // as distinct _1/_2/_3 files, so the parent assembly references
+                // them all — we must place a native under each one or the open
+                // fails with "files could not be found".
+                var aliasNames = ((node.filenames != null && node.filenames.Count > 0)
+                        ? node.filenames
+                        : new List<string> { node.filename })
+                    .Where(f => !string.IsNullOrEmpty(f))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+                var missingNames = aliasNames
+                    .Where(f => !File.Exists(Path.Combine(assemblyDir, f)))
+                    .ToList();
 
                 // Look up the child's full revision so we can both (a) pull
                 // the native file if missing on disk, and (b) recurse into
                 // its own tree.json if it's an assembly.
-                childRev = await ResolveLatestRevisionAsync(api, node.part_number);
+                ApiClient.PartMasterRevisionDto childRev = await ResolveLatestRevisionAsync(api, node.part_number);
 
                 bool hasNative = !string.IsNullOrEmpty(childRev?.EffectiveRefs?.Native3dRaw);
 
-                if (needsDownload && hasNative)
+                if (missingNames.Count > 0)
                 {
-                    try
+                    // Source for the copies: an alias already on disk, else
+                    // download the native once into the first missing name.
+                    string sourcePath = aliasNames
+                        .Select(f => Path.Combine(assemblyDir, f))
+                        .FirstOrDefault(File.Exists);
+
+                    if (sourcePath == null && hasNative)
                     {
-                        string url = await api.GetS3DownloadUrlAsync(childRev.EffectiveRefs.Native3dRaw);
-                        Directory.CreateDirectory(Path.GetDirectoryName(target));
-                        await api.DownloadFileAsync(url, target);
-                        result.Downloaded++;
-                    }
-                    catch { /* per-child failure non-fatal */ }
-                }
-                else if (!hasNative && needsDownload)
-                {
-                    // No native in Atlas AND not already on disk → the user
-                    // must upload this part. Record it (deduped) for the
-                    // post-open report.
-                    if (seenMissing.Add(node.part_number))
-                        result.Missing.Add(new NeedsUpload
+                        try
                         {
-                            PartNumber = node.part_number,
-                            Filename = node.filename,
-                            InAtlasButNoNative = childRev != null,
-                        });
+                            string url = await api.GetS3DownloadUrlAsync(childRev.EffectiveRefs.Native3dRaw);
+                            sourcePath = Path.Combine(assemblyDir, missingNames[0]);
+                            Directory.CreateDirectory(Path.GetDirectoryName(sourcePath));
+                            await api.DownloadFileAsync(url, sourcePath);
+                            result.Downloaded++;
+                            missingNames.RemoveAt(0);
+                        }
+                        catch { sourcePath = null; /* per-child failure non-fatal */ }
+                    }
+
+                    if (sourcePath != null)
+                    {
+                        // Fan the native out to every remaining referenced name.
+                        foreach (var name in missingNames)
+                        {
+                            try
+                            {
+                                string dest = Path.Combine(assemblyDir, name);
+                                if (File.Exists(dest)) continue;
+                                Directory.CreateDirectory(Path.GetDirectoryName(dest));
+                                File.Copy(sourcePath, dest, overwrite: false);
+                                result.Downloaded++;
+                            }
+                            catch { /* per-copy failure non-fatal */ }
+                        }
+                    }
+                    else if (!hasNative)
+                    {
+                        // No native in Atlas AND not already on disk → the user
+                        // must upload this part. Record it (deduped) for the
+                        // post-open report.
+                        if (seenMissing.Add(node.part_number))
+                            result.Missing.Add(new NeedsUpload
+                            {
+                                PartNumber = node.part_number,
+                                Filename = node.filename,
+                                InAtlasButNoNative = childRev != null,
+                            });
+                    }
                 }
 
                 // Recurse: if this child has its own manifest, pre-download

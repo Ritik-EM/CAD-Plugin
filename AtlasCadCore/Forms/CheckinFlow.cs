@@ -184,7 +184,7 @@ namespace AtlasCadCore.Forms
 
                     // P7.49: refresh tree.json for every assembly node so
                     // the stored manifest stays in sync after this revision.
-                    AttachTreeManifests(entries, stepDir);
+                    AttachTreeManifests(entries, native, stepDir);
 
                     if (entries.Count == 0)
                     {
@@ -331,7 +331,7 @@ namespace AtlasCadCore.Forms
 
         private static void Beep() => System.Media.SystemSounds.Beep.Play();
 
-        private static void AttachTreeManifests(List<PartEntry> entries, string stageDir)
+        private static void AttachTreeManifests(List<PartEntry> entries, List<AssemblyFileRef> native, string stageDir)
         {
             if (entries == null || entries.Count == 0) return;
             Directory.CreateDirectory(stageDir);
@@ -343,6 +343,20 @@ namespace AtlasCadCore.Forms
                 if (!childrenByParent.TryGetValue(e.ParentPartNumber, out var list))
                     childrenByParent[e.ParentPartNumber] = list = new List<PartEntry>();
                 list.Add(e);
+            }
+
+            // Every distinct on-disk filename each part_number is referenced
+            // under — CATIA keeps repeated parts as _1/_2/_3 files (one
+            // part_number, many files). The manifest lists them all so checkout
+            // can recreate every name the parent assembly links to.
+            var filenamesByPart = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var n in native ?? new List<AssemblyFileRef>())
+            {
+                if (string.IsNullOrEmpty(n.PartNumber) || string.IsNullOrEmpty(n.Filename)) continue;
+                if (!filenamesByPart.TryGetValue(n.PartNumber, out var fns))
+                    filenamesByPart[n.PartNumber] = fns = new List<string>();
+                if (!fns.Any(x => string.Equals(x, n.Filename, StringComparison.OrdinalIgnoreCase)))
+                    fns.Add(n.Filename);
             }
 
             foreach (var entry in entries)
@@ -361,6 +375,9 @@ namespace AtlasCadCore.Forms
                         {
                             part_number = k.PartNumber,
                             filename = k.NativeFilename,
+                            filenames = filenamesByPart.TryGetValue(k.PartNumber, out var allFns) && allFns.Count > 0
+                                ? allFns
+                                : (string.IsNullOrEmpty(k.NativeFilename) ? new List<string>() : new List<string> { k.NativeFilename }),
                             parent_part_number = k.ParentPartNumber,
                         });
                         Walk(k.PartNumber);

@@ -407,6 +407,20 @@ namespace AtlasCadCore.Forms
                 list.Add(n);
             }
 
+            // Every distinct on-disk filename each part_number is referenced
+            // under. CATIA can keep N physical copies of one part (paste/insert
+            // yields _1/_2/_3 suffixed files); the manifest records them all so
+            // checkout can recreate every name the parent assembly links to.
+            var filenamesByPart = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var n in native)
+            {
+                if (string.IsNullOrEmpty(n.PartNumber) || string.IsNullOrEmpty(n.Filename)) continue;
+                if (!filenamesByPart.TryGetValue(n.PartNumber, out var fns))
+                    filenamesByPart[n.PartNumber] = fns = new List<string>();
+                if (!fns.Any(x => string.Equals(x, n.Filename, StringComparison.OrdinalIgnoreCase)))
+                    fns.Add(n.Filename);
+            }
+
             foreach (var entry in byPart)
             {
                 if (!childrenByParent.ContainsKey(entry.PartNumber)) continue; // not an assembly
@@ -423,6 +437,9 @@ namespace AtlasCadCore.Forms
                         {
                             part_number = k.PartNumber,
                             filename = k.Filename,
+                            filenames = filenamesByPart.TryGetValue(k.PartNumber, out var allFns) && allFns.Count > 0
+                                ? allFns
+                                : (string.IsNullOrEmpty(k.Filename) ? new List<string>() : new List<string> { k.Filename }),
                             parent_part_number = k.ParentPartNumber,
                         });
                         Walk(k.PartNumber);
