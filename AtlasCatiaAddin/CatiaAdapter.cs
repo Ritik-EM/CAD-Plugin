@@ -14,7 +14,7 @@ namespace AtlasCadPlugin.Catia
 {
     public class CatiaAdapter : ICadAdapter
     {
-        public const string WalkAssemblyVersion = "2026-05-29-design-mode-v3";
+        public const string WalkAssemblyVersion = "2026-06-02-embedded-subassembly-v1";
 
         private readonly Application _catApp;
 
@@ -119,7 +119,8 @@ namespace AtlasCadPlugin.Catia
             // checkout. Design Mode loads the real parts so paths resolve.
             EnsureDesignMode(productDoc.Product);
 
-            WalkProductTree(productDoc.Product, rootPn, result, seenPaths);
+            WalkProductTree(productDoc.Product, rootPn, rootPath, result, seenPaths,
+                            new HashSet<string>(StringComparer.OrdinalIgnoreCase));
             return result;
         }
 
@@ -189,8 +190,22 @@ namespace AtlasCadPlugin.Catia
         // `child.ReferenceProduct.Products`. Both expose the same components,
         // but the instance path doesn't depend on ReferenceProduct resolving,
         // which can fail on some CATIA builds.
-        private void WalkProductTree(Product parent, string parentPn,
-                                      List<AssemblyFileRef> output, HashSet<string> seenPaths)
+        //
+        // `containerPath` is the .CATProduct file that physically holds the
+        // `parent` Product. It's how we recognise an EMBEDDED sub-assembly:
+        // a node that aggregates children but has no file of its own — CATIA
+        // stores its definition inside the containing .CATProduct, so
+        // TryGetChildPath resolves it to `containerPath` (the assembly we're
+        // already inside), NOT to a standalone file. Such nodes used to be
+        // dropped by the path-dedup (their path collided with the root, which
+        // is pre-seeded into seenPaths), taking their entire subtree with
+        // them — every embedded sub-assembly and its children vanished from
+        // the manifest. We now detect them, dedup them by part_number (their
+        // container path is identical, so path-dedup can't tell two instances
+        // apart), keep them as file-less structural tree nodes, and recurse.
+        private void WalkProductTree(Product parent, string parentPn, string containerPath,
+                                      List<AssemblyFileRef> output, HashSet<string> seenPaths,
+                                      HashSet<string> seenEmbeddedPns)
         {
             Products children;
             try { children = parent.Products; }
@@ -222,6 +237,83 @@ namespace AtlasCadPlugin.Catia
                 LogWalk($"  child[{i}]: Name='{cName}' PN='{cPn}' DescInst='{cDesc}' " +
                         $"path='{fullPath}' hasChildren={hasChildren}");
 
+                // ---- Embedded sub-assembly (no file of its own) ----
+                // Resolves to the containing .CATProduct rather than a
+                // standalone file. Must NOT go through the path-dedup below.
+                bool embedded = hasChildren
+                                && !string.IsNullOrEmpty(fullPath)
+                                && string.Equals(fullPath, containerPath, StringComparison.OrdinalIgnoreCase);
+                if (embedded)
+                {
+                    // The container's filename would parse to the PARENT's
+                    // part_number, so take the embedded node's own part_number
+                    // straight from the Product (CATIA's PartNumber property).
+                    string embeddedPn = PartNumberParser.ParseOrNull(cPn);
+                    bool? embActivated = TryReadBoolProp(child, "IsActivated");
+
+                    if (string.IsNullOrEmpty(embeddedPn))
+                    {
+                        // No usable part_number: record a skip node for
+                        // diagnostics but still recurse so its file-backed
+                        // descendants aren't lost (best-effort: they hang off
+                        // the nearest resolvable ancestor).
+                        LogWalk($"  child[{i}]: embedded sub-assembly, no part_number — recursing under '{parentPn}'");
+                        output.Add(new AssemblyFileRef
+                        {
+                            FullPath = null,
+                            RelativePath = cName,
+                            Filename = null,
+                            IsRoot = false,
+                            PartNumber = null,
+                            ParentPartNumber = parentPn,
+                            NativeHandle = null,
+                            SkipReason = "no-part-number",
+                        });
+                        if (embActivated != false)
+                            WalkProductTree(child, parentPn, containerPath, output, seenPaths, seenEmbeddedPns);
+                        continue;
+                    }
+
+                    // Dedup repeated instances of the same embedded sub-
+                    // assembly by part_number (path-dedup can't — they share
+                    // the container path). First instance wins and is walked.
+                    if (!seenEmbeddedPns.Add(embeddedPn))
+                    {
+                        LogWalk($"  child[{i}]: embedded '{embeddedPn}' already walked — skipped");
+                        continue;
+                    }
+
+                    // Structural node: SkipReason stays null so it survives
+                    // into `native` (gets a part_master + its own tree.json),
+                    // but FullPath is null so the upload ships no native/step
+                    // for it — there is no file to ship.
+                    LogWalk($"  child[{i}]: embedded sub-assembly -> resolvedPN='{embeddedPn}'");
+                    output.Add(new AssemblyFileRef
+                    {
+                        FullPath = null,
+                        RelativePath = cName,
+                        Filename = null,
+                        IsRoot = false,
+                        PartNumber = embeddedPn,
+                        ParentPartNumber = parentPn,
+                        NativeHandle = null,
+                        SkipReason = null,
+                    });
+
+                    if (embActivated == false)
+                    {
+                        LogWalk($"  child[{i}]: embedded '{embeddedPn}' suppressed — not recursing");
+                        continue;
+                    }
+                    LogWalk($"  child[{i}]: recursing into embedded sub-assembly '{embeddedPn}'");
+                    // containerPath unchanged: the embedded node lives in the
+                    // same .CATProduct, so its own embedded children resolve
+                    // to that same container path too.
+                    WalkProductTree(child, embeddedPn, containerPath, output, seenPaths, seenEmbeddedPns);
+                    continue;
+                }
+
+                // ---- File-backed node (standalone .CATPart / .CATProduct) ----
                 // Suppression detection: V5R21 doesn't expose IsActivated on
                 // Product so the reflection helper returns null there → we
                 // skip the check. V5R2025+ exposes it → suppressed components
@@ -280,10 +372,12 @@ namespace AtlasCadPlugin.Catia
                 // assembly), regardless of its own skip status — except
                 // suppressed nodes, which the user deliberately turned off.
                 // This is the fix for "sub-assembly children not extracted".
+                // A file-backed sub-assembly becomes the container for its own
+                // children, so pass its path down as the new containerPath.
                 if (hasChildren && skipReason != "suppressed")
                 {
                     LogWalk($"  child[{i}]: recursing into sub-assembly '{displayName}'");
-                    WalkProductTree(child, childPn, output, seenPaths);
+                    WalkProductTree(child, childPn, fullPath, output, seenPaths, seenEmbeddedPns);
                 }
             }
         }
@@ -414,6 +508,10 @@ namespace AtlasCadPlugin.Catia
             for (int i = 0; i < inputs.Count; i++)
             {
                 var f = inputs[i];
+                // Skip file-less structural nodes (embedded sub-assemblies that
+                // live inside the parent .CATProduct) — there's no native to
+                // export a STEP from.
+                if (string.IsNullOrEmpty(f.Filename) || string.IsNullOrEmpty(f.FullPath)) continue;
                 string ext = Path.GetExtension(f.Filename).ToLowerInvariant();
                 if (ext != ".catpart" && ext != ".catproduct") continue;
                 progress?.Invoke(i + 1, inputs.Count, f.Filename);

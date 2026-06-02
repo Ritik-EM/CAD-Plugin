@@ -171,7 +171,11 @@ namespace AtlasCadCore.Forms
                     var all = native.Concat(steps).ToList();
                     System.Threading.Tasks.Parallel.ForEach(all, f =>
                     {
-                        f.Sha256 = FileHashing.Sha256Hex(f.FullPath);
+                        // Embedded sub-assemblies carry no native file on disk
+                        // (stored inside the parent .CATProduct) — nothing to
+                        // hash; they still ride along as tree nodes.
+                        if (!string.IsNullOrEmpty(f.FullPath) && File.Exists(f.FullPath))
+                            f.Sha256 = FileHashing.Sha256Hex(f.FullPath);
                         int n = System.Threading.Interlocked.Increment(ref hashed);
                         progress.SetPhase($"Hashing files… {n}/{all.Count}", n, all.Count);
                     });
