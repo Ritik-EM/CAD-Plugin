@@ -159,9 +159,16 @@ namespace AtlasCadCore.Forms
                     }
 
                     stepDir = Path.Combine(Path.GetTempPath(), "AtlasCadStep_" + Guid.NewGuid().ToString("N"));
-                    progress.SetPhase("Exporting STEP files…", 0, native.Count);
+                    // One STEP per part_number — repeated parts (CATIA _1/_2/_3
+                    // copies) share a part_number; only the canonical needs a STEP.
+                    var stepInputs = native
+                        .Where(n => !string.IsNullOrEmpty(n.PartNumber))
+                        .GroupBy(n => n.PartNumber, StringComparer.OrdinalIgnoreCase)
+                        .Select(g => g.First())
+                        .ToList();
+                    progress.SetPhase("Exporting STEP files…", 0, stepInputs.Count);
                     var steps = adapter.ExportStep(
-                        doc, native, stepDir,
+                        doc, stepInputs, stepDir,
                         progress: (cur, total, filename) =>
                             progress.SetPhase($"Exporting STEP {cur}/{total}: {filename}", cur, total)
                     ) ?? new List<AssemblyFileRef>();
@@ -434,21 +441,39 @@ namespace AtlasCadCore.Forms
             }
 
             var result = new List<PartEntry>();
-            foreach (var kv in nativeByPart)
+            var byPart = new Dictionary<string, PartEntry>(StringComparer.OrdinalIgnoreCase);
+            foreach (var n in native)
             {
-                var n = kv.Value;
-                stepByPart.TryGetValue(n.PartNumber, out var step);
-                result.Add(new PartEntry
+                if (string.IsNullOrEmpty(n.PartNumber)) continue;
+                if (!byPart.TryGetValue(n.PartNumber, out var entry))
                 {
-                    PartNumber = n.PartNumber,
-                    ParentPartNumber = n.ParentPartNumber,
-                    NativeFilename = n.Filename,
-                    NativePath = n.FullPath,
-                    StepFilename = step?.Filename,
-                    StepPath = step?.FullPath,
-                    Sha256 = n.Sha256,
-                    Depth = DepthOf(n.PartNumber),
-                });
+                    // First file for this part_number = the canonical native.
+                    stepByPart.TryGetValue(n.PartNumber, out var step);
+                    entry = new PartEntry
+                    {
+                        PartNumber = n.PartNumber,
+                        ParentPartNumber = n.ParentPartNumber,
+                        NativeFilename = n.Filename,
+                        NativePath = n.FullPath,
+                        StepFilename = step?.Filename,
+                        StepPath = step?.FullPath,
+                        Sha256 = n.Sha256,
+                        Depth = DepthOf(n.PartNumber),
+                    };
+                    byPart[n.PartNumber] = entry;
+                    result.Add(entry);
+                }
+                else
+                {
+                    // Extra distinct file sharing this part_number (CATIA _1/_2/_3
+                    // copies). Carry it as a companion so a revision bump stores
+                    // every original byte-exact — mirrors the upload path.
+                    if (string.IsNullOrEmpty(n.Filename) || string.IsNullOrEmpty(n.FullPath)) continue;
+                    if (string.Equals(n.Filename, entry.NativeFilename, StringComparison.OrdinalIgnoreCase)) continue;
+                    if (entry.CompanionFilenames.Any(f => string.Equals(f, n.Filename, StringComparison.OrdinalIgnoreCase))) continue;
+                    entry.CompanionFilenames.Add(n.Filename);
+                    entry.CompanionPaths.Add(n.FullPath);
+                }
             }
             return result;
         }
@@ -483,6 +508,10 @@ namespace AtlasCadCore.Forms
             // P7.49: assembly nodes get a fresh tree.json on each check-in.
             public string TreeFilename;
             public string TreePath;
+            // Extra distinct files sharing this part_number (CATIA _1/_2/_3
+            // copies) — stored byte-exact on a revision bump. Parallel lists.
+            public List<string> CompanionFilenames = new List<string>();
+            public List<string> CompanionPaths = new List<string>();
             public string Sha256;
             public int Depth;
 
@@ -493,6 +522,7 @@ namespace AtlasCadCore.Forms
                 filename = NativeFilename,
                 step_filename = StepFilename,
                 tree_filename = TreeFilename,
+                companion_filenames = CompanionFilenames,
                 sha256 = Sha256,
             };
 
@@ -501,6 +531,8 @@ namespace AtlasCadCore.Forms
                 if (!string.IsNullOrEmpty(NativePath)) yield return NativePath;
                 if (!string.IsNullOrEmpty(StepPath)) yield return StepPath;
                 if (!string.IsNullOrEmpty(TreePath)) yield return TreePath;
+                foreach (var p in CompanionPaths)
+                    if (!string.IsNullOrEmpty(p)) yield return p;
             }
         }
     }
