@@ -14,7 +14,7 @@ namespace AtlasCadPlugin.Catia
 {
     public class CatiaAdapter : ICadAdapter
     {
-        public const string WalkAssemblyVersion = "2026-06-02-embedded-subassembly-v1";
+        public const string WalkAssemblyVersion = "2026-06-03-save-all-modified-v1";
 
         private readonly Application _catApp;
 
@@ -47,21 +47,75 @@ namespace AtlasCadPlugin.Catia
 
         public void SaveDocument(CadDocument doc)
         {
-            var catDoc = (Document)doc.NativeHandle;
-            // CATIA throws E_UNEXPECTED if there's nothing to save or the doc
-            // has never been saved to disk. Skip the call in those cases —
-            // Save() is best-effort here.
+            // Save EVERY modified open document, not just the active one.
+            // CATIA's Document.Save() does NOT cascade to modified children: an
+            // in-context edit (e.g. changing a part's geometry or colour while
+            // the assembly is active) leaves the child .CATPart dirty IN THE
+            // SESSION but unsaved ON DISK. The walk then hashes the OLD file on
+            // disk and the change is silently lost (no diff → no revision bump →
+            // checkout shows the pre-edit part). Saving all dirty docs first
+            // guarantees every edit is on disk before we walk/upload.
+            //
+            // Order doesn't matter for the final on-disk state — a CATProduct
+            // stores child links by path, not embedded content, so the product
+            // and its parts each persist their own data independently.
+            string activePath = null;
+            try { activePath = ((Document)doc?.NativeHandle)?.FullName; } catch { }
+            LogWalk($"SaveDocument: saving all modified docs (active='{activePath}')");
+
+            int saved = 0, total = 0;
             try
             {
-                if (catDoc.Saved) return;
+                total = _catApp.Documents.Count;
+                for (int i = 1; i <= total; i++)
+                {
+                    Document d;
+                    try { d = _catApp.Documents.Item(i); }
+                    catch (Exception ex) { LogWalk($"  doc[{i}] Item() threw: {ex.Message}"); continue; }
+                    if (SaveOneIfModified(d)) saved++;
+                }
             }
-            catch { /* Saved unsupported on some doc types — fall through */ }
+            catch (Exception ex) { LogWalk($"SaveDocument: Documents iterate threw: {ex.Message}"); }
 
-            if (string.IsNullOrEmpty(catDoc.FullName))
-                return; // never been saved; SaveAs is the user's problem
+            // Belt-and-braces: make sure the active doc is saved even if the
+            // collection enumeration somehow skipped it (already-saved → no-op).
+            try { if (SaveOneIfModified((Document)doc?.NativeHandle)) saved++; } catch { }
 
-            try { catDoc.Save(); }
-            catch (System.Runtime.InteropServices.COMException) { /* best-effort */ }
+            LogWalk($"SaveDocument: saved {saved} modified doc(s) of {total} open");
+        }
+
+        // Saves one document iff it's modified and has a path on disk.
+        // Best-effort: CATIA throws E_UNEXPECTED when there's nothing to save or
+        // the doc was never saved to disk, so every call is guarded.
+        private static bool SaveOneIfModified(Document d)
+        {
+            if (d == null) return false;
+
+            bool needsSave = true;
+            try { needsSave = !d.Saved; }
+            catch { /* Saved unsupported on some doc types — attempt save anyway */ }
+            if (!needsSave) return false;
+
+            string full = null;
+            try { full = d.FullName; } catch { }
+            if (string.IsNullOrEmpty(full))
+            {
+                // Never saved to disk yet — SaveAs is the user's responsibility.
+                LogWalk($"  skip modified doc with no path on disk");
+                return false;
+            }
+
+            try
+            {
+                d.Save();
+                LogWalk($"  saved '{Path.GetFileName(full)}'");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                LogWalk($"  save FAILED for '{Path.GetFileName(full)}': {ex.Message}");
+                return false;
+            }
         }
 
         public void OpenDocument(string filePath)
