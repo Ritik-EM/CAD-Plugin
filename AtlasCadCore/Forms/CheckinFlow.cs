@@ -189,6 +189,44 @@ namespace AtlasCadCore.Forms
 
                     var entries = BuildPartEntries(native, steps, rootPartNumber);
 
+                    // A revision bump changes the part_number (…0F → …0G) but NOT
+                    // the on-disk filename, so a re-checked-out BUMPED assembly's
+                    // root file still PARSES to its previous revision (e.g. file
+                    // "AH120295_0F_….CATProduct" → AH1202950F even though it's
+                    // checked out as AH1202950G). The CheckoutTracker is the
+                    // authoritative record of what's checked out, so if the
+                    // walked root differs from the tracker ONLY by revision suffix
+                    // (same 8-char base), remap the root — and every reference to
+                    // it — to the actual checked-out revision before we build the
+                    // manifest / validate, otherwise the "doesn't match the
+                    // checked-out part" guard blocks a legitimate re-check-in.
+                    var rootEntry = entries.FirstOrDefault(e => string.IsNullOrEmpty(e.ParentPartNumber));
+                    if (rootEntry != null
+                        && !string.IsNullOrEmpty(rootEntry.PartNumber)
+                        && !string.Equals(rootEntry.PartNumber, rootPartNumber, StringComparison.OrdinalIgnoreCase)
+                        && rootEntry.PartNumber.Length >= 8 && rootPartNumber.Length >= 8
+                        && string.Equals(rootEntry.PartNumber.Substring(0, 8),
+                                         rootPartNumber.Substring(0, 8), StringComparison.OrdinalIgnoreCase))
+                    {
+                        string staleRoot = rootEntry.PartNumber;
+                        foreach (var e in entries)
+                        {
+                            if (string.Equals(e.PartNumber, staleRoot, StringComparison.OrdinalIgnoreCase))
+                                e.PartNumber = rootPartNumber;
+                            if (string.Equals(e.ParentPartNumber, staleRoot, StringComparison.OrdinalIgnoreCase))
+                                e.ParentPartNumber = rootPartNumber;
+                        }
+                        try
+                        {
+                            File.AppendAllText(
+                                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                                             "AtlasCad", "walk_assembly.log"),
+                                $"--- {DateTime.Now:O} Checkin: remapped stale root {staleRoot} -> {rootPartNumber} " +
+                                "(filename kept pre-bump revision)\n");
+                        }
+                        catch { }
+                    }
+
                     // P7.49: refresh tree.json for every assembly node so
                     // the stored manifest stays in sync after this revision.
                     AttachTreeManifests(entries, native, stepDir);
