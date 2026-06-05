@@ -52,6 +52,14 @@ namespace AtlasCadCore.Forms
             /// derived from tree.json, NOT from the CAD app's (unreliable)
             /// broken-reference detection.</summary>
             public List<NeedsUpload> Missing = new List<NeedsUpload>();
+
+            /// <summary>filename → the current revision's part_number for every
+            /// node materialised by this preflight (each alias filename maps to
+            /// the same part_number). Drives the display-only spec-tree relabel
+            /// on checkout so each part shows its live Atlas revision. Excludes
+            /// the root (the caller knows the root's part_number directly).</summary>
+            public Dictionary<string, string> CurrentPnByFilename =
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         public class NeedsUpload
@@ -161,6 +169,13 @@ namespace AtlasCadCore.Forms
                 var missingNames = aliasNames
                     .Where(f => !File.Exists(Path.Combine(assemblyDir, f)))
                     .ToList();
+
+                // Record filename → current revision so checkout can relabel the
+                // spec tree to show the live revision (display-only). Every alias
+                // (each _1/_2 companion file) maps to the same part_number.
+                foreach (var an in aliasNames)
+                    if (!result.CurrentPnByFilename.ContainsKey(an))
+                        result.CurrentPnByFilename[an] = node.part_number;
 
                 // Look up the child's full revision so we can both (a) pull
                 // the native file if missing on disk, and (b) recurse into

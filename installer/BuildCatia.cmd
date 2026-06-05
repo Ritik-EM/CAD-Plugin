@@ -45,6 +45,16 @@ if not defined CATIA_CODE_BIN (
 
 echo Using CATIA_CODE_BIN=%CATIA_CODE_BIN%
 
+REM Force-rebuild the SHARED core first. /t:Rebuild on the addin project only
+REM CLEANS the addin — AtlasCadCore is pulled in as an incremental project
+REM reference, and git checkout/pull timestamps routinely fool MSBuild into
+REM thinking the old AtlasCadCore.dll is still up-to-date, so it ships a STALE
+REM core (addin fixes appear, core fixes like CheckinFlow don't). Rebuilding
+REM the core explicitly guarantees a fresh AtlasCadCore.dll every time.
+echo === Rebuilding AtlasCadCore (shared core, forced) ===
+msbuild ..\AtlasCadCore\AtlasCadCore.csproj /p:Configuration=Release /t:Rebuild
+if errorlevel 1 goto :error
+
 echo === Building CATIA add-in in Release ===
 msbuild ..\AtlasCatiaAddin\AtlasCatiaAddin.csproj /p:Configuration=Release "/p:CATIA_CODE_BIN=%CATIA_CODE_BIN%" /t:Rebuild
 if errorlevel 1 goto :error

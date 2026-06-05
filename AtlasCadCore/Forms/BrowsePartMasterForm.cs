@@ -576,6 +576,32 @@ namespace AtlasCadCore.Forms
                 SetBusy(false, null);
                 ChildrenToUploadForm.ShowIfAny(preflight?.Missing);
 
+                // Display-only: relabel the spec tree so every component shows
+                // its CURRENT Atlas revision (the dome reads "…_0H_…" once Atlas
+                // bumped it, even though its filename keeps "…_0G_…"). Done here
+                // — after open+resolve, BEFORE the baseline hash — so the saved
+                // relabel is part of the baseline and check-in never mistakes it
+                // for a real edit. CATIA-only via the optional capability.
+                if (_adapter is IRevisionDisplayAdapter revDisplay)
+                {
+                    try
+                    {
+                        SetBusy(true, "Updating revision labels…");
+                        var displayMap = new Dictionary<string, string>(
+                            preflight?.CurrentPnByFilename
+                                ?? new Dictionary<string, string>(),
+                            StringComparer.OrdinalIgnoreCase);
+                        string rootFile = Path.GetFileName(picked.Path);
+                        if (!string.IsNullOrEmpty(rootFile))
+                            displayMap[rootFile] = pn;   // root's current revision
+                        if (displayMap.Count > 0)
+                            revDisplay.ApplyRevisionDisplay(
+                                _adapter.GetActiveDocument() ?? openedDoc, displayMap);
+                    }
+                    catch { /* cosmetic — never block checkout */ }
+                    finally { SetBusy(false, null); }
+                }
+
                 try
                 {
                     SetBusy(true, "Recording baseline file hashes…");

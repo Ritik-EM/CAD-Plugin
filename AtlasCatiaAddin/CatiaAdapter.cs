@@ -12,9 +12,9 @@ using KnowledgewareTypeLib;
 
 namespace AtlasCadPlugin.Catia
 {
-    public class CatiaAdapter : ICadAdapter
+    public class CatiaAdapter : ICadAdapter, IRevisionDisplayAdapter
     {
-        public const string WalkAssemblyVersion = "2026-06-03-save-all-modified-v1";
+        public const string WalkAssemblyVersion = "2026-06-06-revision-display-v1";
 
         private readonly Application _catApp;
 
@@ -917,6 +917,152 @@ namespace AtlasCadPlugin.Catia
             }
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // IRevisionDisplayAdapter — display-only spec-tree relabel (P-revdisp).
+        //
+        // Shows each component's CURRENT Atlas revision in the tree label (the
+        // dome reads "AH120276_0H_FRONT WHEEL DOME" once Atlas bumped it to 0H)
+        // by rewriting the product's PartNumber — the text before the parens.
+        //
+        // SAFE: changing PartNumber is display-only. CATIA links children by the
+        // internal document UUID, not the PartNumber (proven earlier — patching
+        // PartNumber did NOT fix a "wrong information" link error), so it can't
+        // break parent→child resolution. The walk/upload/check-in resolve part
+        // numbers from the FILENAME and the PART_NUMBER user parameter (see
+        // ResolvePartNumber), never this product label, so relabelling can't
+        // disturb part-number resolution — and the new label isn't a valid
+        // 10-char code anyway, so even if it were read it'd be rejected.
+        //
+        // We SAVE the relabel here so the checkout baseline hash (recorded right
+        // after this) captures it; otherwise check-in's save-all would persist
+        // it later and the hash diff would look like a real edit → phantom bump.
+        // ─────────────────────────────────────────────────────────────────────
+        public int ApplyRevisionDisplay(CadDocument doc,
+                                        IDictionary<string, string> currentPartNumberByFilename)
+        {
+            if (doc?.NativeHandle == null || currentPartNumberByFilename == null ||
+                currentPartNumberByFilename.Count == 0)
+                return 0;
+
+            var prodDoc = doc.NativeHandle as ProductDocument;
+            if (prodDoc == null) return 0;   // only assemblies have a tree to relabel
+
+            LogWalk($"ApplyRevisionDisplay: v={WalkAssemblyVersion} map={currentPartNumberByFilename.Count} entries");
+
+            int changed = 0;
+            try
+            {
+                EnsureDesignMode(prodDoc.Product);
+
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                // Root product itself (its label also starts with the partcode).
+                try
+                {
+                    string rootFile = string.IsNullOrEmpty(doc.FullPath)
+                        ? null : Path.GetFileName(doc.FullPath);
+                    if (!string.IsNullOrEmpty(rootFile) && seen.Add(rootFile) &&
+                        TryApplyRevisionLabel(prodDoc.Product, rootFile, currentPartNumberByFilename))
+                        changed++;
+                }
+                catch (Exception ex) { LogWalk($"ApplyRevisionDisplay: root relabel threw: {ex.Message}"); }
+
+                ApplyRevisionDisplayWalk(prodDoc.Product, currentPartNumberByFilename, seen, ref changed);
+            }
+            catch (Exception ex) { LogWalk($"ApplyRevisionDisplay: threw: {ex.Message}"); }
+
+            // Persist so the change survives and the baseline hash includes it.
+            if (changed > 0)
+            {
+                try { SaveDocument(doc); }
+                catch (Exception ex) { LogWalk($"ApplyRevisionDisplay: SaveDocument threw: {ex.Message}"); }
+            }
+            LogWalk($"ApplyRevisionDisplay: relabelled {changed} product(s)");
+            return changed;
+        }
+
+        private void ApplyRevisionDisplayWalk(Product parent,
+                                              IDictionary<string, string> map,
+                                              HashSet<string> seen, ref int changed)
+        {
+            Products children;
+            try { children = parent.Products; } catch { return; }
+            if (children == null) return;
+            int count;
+            try { count = children.Count; } catch { return; }
+
+            for (int i = 1; i <= count; i++)
+            {
+                Product child;
+                try { child = children.Item(i); } catch { continue; }
+                if (child == null) continue;
+
+                string fullPath = TryGetChildPath(child);
+                string filename = string.IsNullOrEmpty(fullPath) ? null : Path.GetFileName(fullPath);
+
+                // The tree label before the parens is the REFERENCE product's
+                // PartNumber, shared by every instance of the same file — so we
+                // relabel the reference once per distinct filename.
+                if (!string.IsNullOrEmpty(filename) && seen.Add(filename))
+                {
+                    Product refProd = null;
+                    try { refProd = child.ReferenceProduct; } catch { }
+                    if (TryApplyRevisionLabel(refProd ?? child, filename, map))
+                        changed++;
+                }
+
+                if (ProductHasChildren(child))
+                    ApplyRevisionDisplayWalk(child, map, seen, ref changed);
+            }
+        }
+
+        private bool TryApplyRevisionLabel(Product target, string filename,
+                                           IDictionary<string, string> map)
+        {
+            if (target == null || string.IsNullOrEmpty(filename)) return false;
+            if (!map.TryGetValue(filename, out string currentPn) || string.IsNullOrEmpty(currentPn))
+                return false;
+
+            string oldLabel = ProductPartNumber(target);
+            string newLabel = ComputeRevisionDisplay(oldLabel, filename, currentPn);
+            if (string.IsNullOrEmpty(newLabel) ||
+                string.Equals(newLabel, oldLabel, StringComparison.Ordinal))
+                return false;
+
+            bool ok = WriteStringProp(target, "PartNumber", newLabel);
+            LogWalk($"  relabel '{filename}': '{oldLabel}' -> '{newLabel}' ({(ok ? "ok" : "FAILED")})");
+            return ok;
+        }
+
+        // Swap only the 2-char revision token in a display label, preserving the
+        // human description. Convention (PartNumberParser.BaseRevPattern):
+        //   base8 + "_" + rev2 + "_" + description
+        // e.g. "AH120276_0G_FRONT WHEEL DOME" + current pn "AH1202760H"
+        //   ->  "AH120276_0H_FRONT WHEEL DOME".
+        // Returns null (leave unchanged) if the label doesn't fit the convention
+        // for this part's base — we never guess.
+        private static string ComputeRevisionDisplay(string oldLabel, string filename, string currentPn)
+        {
+            if (string.IsNullOrEmpty(currentPn) || currentPn.Length < 10) return null;
+            string baseCode = currentPn.Substring(0, 8);
+            string newSuffix = currentPn.Substring(8, 2);
+
+            string src = !string.IsNullOrEmpty(oldLabel)
+                ? oldLabel
+                : Path.GetFileNameWithoutExtension(filename);
+            if (string.IsNullOrEmpty(src) || src.Length < 11) return null;
+
+            // src must be "<baseCode>_<rev2>…" to be safely rewritable. (If it's
+            // already showing newSuffix the result equals src and the caller's
+            // equality check skips the write — so no idempotency guard needed.)
+            if (!src.Substring(0, 8).Equals(baseCode, StringComparison.OrdinalIgnoreCase) ||
+                src[8] != '_')
+                return null;
+
+            string rest = src.Substring(11);            // "_FRONT WHEEL DOME" (or "")
+            return baseCode + "_" + newSuffix + rest;
+        }
+
         private static void LogWalk(string line)
         {
             try
@@ -982,6 +1128,49 @@ namespace AtlasCadPlugin.Catia
             }
             catch { }
             return null;
+        }
+
+        // Mirror of ReadStringProp for WRITING a string COM property across the
+        // two Interop shapes (clean setter → set_X(value) → IDispatch).
+        private static bool WriteStringProp(object target, string propName, string value)
+        {
+            if (target == null) return false;
+            Type t = target.GetType();
+            // Clean property setter (R2025 shape).
+            try
+            {
+                PropertyInfo pi = t.GetProperty(propName,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                if (pi != null && pi.CanWrite)
+                {
+                    pi.SetValue(target, value, null);
+                    return true;
+                }
+            }
+            catch { }
+            // set_X(value) method (R21 shape).
+            try
+            {
+                MethodInfo mi = t.GetMethod("set_" + propName,
+                    BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase,
+                    binder: null, types: new[] { typeof(string) }, modifiers: null);
+                if (mi != null)
+                {
+                    mi.Invoke(target, new object[] { value });
+                    return true;
+                }
+            }
+            catch { }
+            // Last resort: IDispatch SetProperty.
+            try
+            {
+                t.InvokeMember(propName,
+                    BindingFlags.SetProperty | BindingFlags.Instance | BindingFlags.Public,
+                    null, target, new object[] { value });
+                return true;
+            }
+            catch { }
+            return false;
         }
 
         private static bool? TryReadBoolProp(object target, string propName)
