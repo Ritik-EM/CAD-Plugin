@@ -47,6 +47,7 @@
     <Compile Include="Adapter\AssemblyFileRef.cs" />
     <Compile Include="Adapter\CadDocument.cs" />
     <Compile Include="Adapter\ICadAdapter.cs" />
+    <Compile Include="Adapter\IRevisionDisplayAdapter.cs" />
     <Compile Include="Adapter\MissingComponent.cs" />
     <Compile Include="ApiClient\AtlasApiClient.cs" />
     <Compile Include="ApiClient\Dtos.cs" />
@@ -66,6 +67,7 @@
     <Compile Include="Forms\MyCheckoutsForm.cs" />
     <Compile Include="Forms\PartMasterPickerDialog.cs" />
     <Compile Include="Forms\ProgressForm.cs" />
+    <Compile Include="Forms\ReleasePartNumberForm.cs" />
     <Compile Include="Forms\ResolveFromAtlasFlow.cs" />
     <Compile Include="Forms\TreeManifestPreflight.cs" />
     <Compile Include="Forms\UploadToPartMasterForm.cs" />

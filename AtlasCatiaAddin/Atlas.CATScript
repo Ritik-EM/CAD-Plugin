@@ -24,7 +24,8 @@ prompt = "Atlas — pick an action:" & vbCrLf & vbCrLf & _
          "  4 = Check In" & vbCrLf & _
          "  5 = Resolve from Atlas (fetch missing children)" & vbCrLf & _
          "  6 = My Checkouts" & vbCrLf & _
-         "  7 = Sign Out" & vbCrLf & vbCrLf & _
+         "  7 = Release Part Code" & vbCrLf & _
+         "  8 = Sign Out" & vbCrLf & vbCrLf & _
          "(Cancel to close)"
 
 Do
@@ -39,7 +40,8 @@ Do
         Case "4": atlas.OnCheckinClicked()
         Case "5": atlas.OnResolveClicked()
         Case "6": atlas.OnMyCheckoutsClicked()
-        Case "7": atlas.OnSignOutClicked()
-        Case Else: MsgBox "Invalid choice '" & choice & "'. Enter 1-7.", vbExclamation, "Atlas"
+        Case "7": atlas.OnReleasePartNumberClicked()
+        Case "8": atlas.OnSignOutClicked()
+        Case Else: MsgBox "Invalid choice '" & choice & "'. Enter 1-8.", vbExclamation, "Atlas"
     End Select
 Loop

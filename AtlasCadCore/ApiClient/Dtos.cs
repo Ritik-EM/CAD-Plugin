@@ -194,6 +194,40 @@ namespace AtlasCadCore.ApiClient
         public string minor_group;
         public string release_type;
         public string description;
+        // Full atlas-ui release field set (all optional server-side).
+        public string aggregate;
+        public string sub_aggregate;
+        public string source;
+        public bool? available_for_service;
+    }
+
+    /// <summary>One aggregate / sub-aggregate pairing from
+    /// GET /part-master/aggregate-config.</summary>
+    public class AggregateConfigDto
+    {
+        public string aggregate;
+        public string sub_aggregate;
+    }
+
+    /// <summary>A {value,label} option for a metadata-driven dropdown. ToString
+    /// returns the label so it renders directly in a WinForms ComboBox while the
+    /// caller reads <see cref="Value"/> for the payload.</summary>
+    public class NamedOption
+    {
+        public string Value;
+        public string Label;
+        public NamedOption() { }
+        public NamedOption(string value, string label) { Value = value; Label = label; }
+        public override string ToString() => Label ?? Value ?? "";
+    }
+
+    /// <summary>Major groups plus the minor groups nested under each, parsed
+    /// from GET /part-master/part-number/group/filters (cascading dropdowns).</summary>
+    public class GroupTreeDto
+    {
+        public List<NamedOption> Majors = new List<NamedOption>();
+        public Dictionary<string, List<NamedOption>> MinorsByMajor =
+            new Dictionary<string, List<NamedOption>>(System.StringComparer.OrdinalIgnoreCase);
     }
 
     public class CreateBatchResultDto

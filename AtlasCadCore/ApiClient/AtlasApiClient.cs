@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using AtlasCadCore.Auth;
 using AtlasCadCore.Utility;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace AtlasCadCore.ApiClient
 {
@@ -300,6 +301,110 @@ namespace AtlasCadCore.ApiClient
                 "/api/v1/s3/download/presigned?key=" + Uri.EscapeDataString(s3Key));
             string body = await SendAsync(req, "S3 presign");
             return JsonConvert.DeserializeObject<ApiEnvelope<S3PresignedDownloadDto>>(body).data.url;
+        }
+
+        // ── Release Part Code: metadata + preview ──────────────────────────────
+        // These mirror the endpoints atlas-ui's release page calls so the plugin
+        // form offers the same cascading dropdowns. The metadata docs are dynamic
+        // dicts (major→{part_number_identifier, minor_groups}, models, etc.) so
+        // they're parsed with JToken rather than rigid DTOs.
+
+        // Builds a {value,label} option the same way atlas-ui's mapToOptions does:
+        // "<part_number_identifier> - <key>", falling back to the bare key.
+        private static NamedOption ToOption(string key, JToken meta)
+        {
+            string ident = meta?["part_number_identifier"]?.ToString();
+            string label = string.IsNullOrEmpty(ident) ? key : $"{ident} - {key}";
+            return new NamedOption(key, label);
+        }
+
+        private static JToken FirstDocData(string body)
+        {
+            // Envelope: { data: [ { data: {...} }, ... ] } → return data[0].data
+            var data = JObject.Parse(body)["data"] as JArray;
+            if (data == null || data.Count == 0) return null;
+            return data[0]?["data"];
+        }
+
+        /// <summary>Model options for a vehicle category
+        /// (GET /part-master/part-number/model-code/filters).</summary>
+        public async Task<List<NamedOption>> FetchModelOptionsAsync(string vehicleCategory)
+        {
+            var req = NewRequest(HttpMethod.Get,
+                "/api/v1/part-master/part-number/model-code/filters?vehicle_category="
+                + Uri.EscapeDataString(vehicleCategory ?? ""));
+            string body = await SendAsync(req, "Fetch models");
+            var models = FirstDocData(body)?["models"] as JObject;
+            var options = new List<NamedOption>();
+            if (models != null)
+                foreach (var p in models.Properties())
+                    options.Add(ToOption(p.Name, p.Value));
+            return options;
+        }
+
+        /// <summary>Major groups + the minor groups nested under each, for a
+        /// project + vehicle category (GET /part-master/part-number/group/filters).</summary>
+        public async Task<GroupTreeDto> FetchGroupTreeAsync(string projectIdentifier, string vehicleCategory)
+        {
+            var qs = "project_identifier=" + Uri.EscapeDataString(projectIdentifier ?? "");
+            if (!string.IsNullOrEmpty(vehicleCategory))
+                qs += "&vehicle_category=" + Uri.EscapeDataString(vehicleCategory);
+            var req = NewRequest(HttpMethod.Get,
+                "/api/v1/part-master/part-number/group/filters?" + qs);
+            string body = await SendAsync(req, "Fetch groups");
+
+            var tree = new GroupTreeDto();
+            var majors = FirstDocData(body) as JObject;
+            if (majors != null)
+            {
+                foreach (var mp in majors.Properties())
+                {
+                    tree.Majors.Add(ToOption(mp.Name, mp.Value));
+                    var minors = new List<NamedOption>();
+                    if (mp.Value?["minor_groups"] is JObject minorObj)
+                        foreach (var np in minorObj.Properties())
+                            minors.Add(ToOption(np.Name, np.Value));
+                    tree.MinorsByMajor[mp.Name] = minors;
+                }
+            }
+            return tree;
+        }
+
+        /// <summary>All aggregate / sub-aggregate pairings
+        /// (GET /part-master/aggregate-config).</summary>
+        public async Task<List<AggregateConfigDto>> FetchAggregateConfigsAsync()
+        {
+            var req = NewRequest(HttpMethod.Get, "/api/v1/part-master/aggregate-config");
+            string body = await SendAsync(req, "Fetch aggregate config");
+            // This endpoint returns a RAW JSON array (it `return`s the list rather
+            // than going through the RequestSuccess envelope), but tolerate an
+            // enveloped {data:[...]} shape too in case that ever changes.
+            var token = JToken.Parse(body);
+            JArray arr = token as JArray ?? token["data"] as JArray;
+            return arr?.ToObject<List<AggregateConfigDto>>() ?? new List<AggregateConfigDto>();
+        }
+
+        /// <summary>Live preview of the next part_number that would be minted
+        /// (POST /part-master/part-number/generate-next-part-number).</summary>
+        public async Task<string> GenerateNextPartNumberAsync(
+            string projectIdentifier, string vehicleCategory, string model,
+            string majorGroup, string minorGroup, string releaseType)
+        {
+            var req = NewRequest(HttpMethod.Post,
+                "/api/v1/part-master/part-number/generate-next-part-number");
+            req.Content = new StringContent(
+                JsonConvert.SerializeObject(new
+                {
+                    project_identifier = projectIdentifier,
+                    vehicle_category = vehicleCategory,
+                    model,
+                    major_group = majorGroup,
+                    minor_group = minorGroup,
+                    release_type = releaseType,
+                }),
+                System.Text.Encoding.UTF8, "application/json");
+            string body = await SendAsync(req, "Preview part number");
+            return JsonConvert.DeserializeObject<ApiEnvelope<string>>(body).data;
         }
 
         public async Task<PartLookupResult> LookupPartNumbersAsync(List<string> partNumbers)

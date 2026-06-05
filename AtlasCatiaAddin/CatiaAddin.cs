@@ -81,6 +81,17 @@ namespace AtlasCadPlugin.Catia
             catch (Exception ex) { AtlasErrorReporter.Show("My Checkouts failed", "OnMyCheckoutsClicked", ex); }
         }
 
+        public void OnReleasePartNumberClicked()
+        {
+            try
+            {
+                if (!EnsureAuthenticated()) return;
+                using (var form = new ReleasePartNumberForm(_api)) { form.ShowDialog(); }
+            }
+            catch (UnauthorizedException) { HandleUnauthorized(); }
+            catch (Exception ex) { AtlasErrorReporter.Show("Release Part Code failed", "OnReleasePartNumberClicked", ex); }
+        }
+
         public void OnSignOutClicked()
         {
             TokenStore.Clear();
