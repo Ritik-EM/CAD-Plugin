@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -44,6 +45,30 @@ namespace AtlasCadPlugin.Catia
 
             EnsureAuthenticated();
             _ = AutoUpdater.CheckAsync(_api);
+        }
+
+        /// <summary>Mouse-clickable action menu (replaces the type-a-number
+        /// InputBox). The macro just calls Initialize then ShowMenu.</summary>
+        public void ShowMenu()
+        {
+            try
+            {
+                if (!EnsureAuthenticated()) return;
+                var actions = new List<MenuAction>
+                {
+                    new MenuAction("Ping (test connection)", OnPingClicked),
+                    new MenuAction("Upload to Atlas", OnUploadClicked),
+                    new MenuAction("Browse Part Master Library", OnBrowseClicked),
+                    new MenuAction("Check In", OnCheckinClicked),
+                    new MenuAction("Resolve from Atlas (fetch missing children)", OnResolveClicked),
+                    new MenuAction("My Checkouts", OnMyCheckoutsClicked),
+                    new MenuAction("Release Part Code", OnReleasePartNumberClicked),
+                    new MenuAction("Sign Out", OnSignOutClicked),
+                };
+                using (var menu = new ActionMenuForm("Atlas — pick an action", actions))
+                    menu.ShowDialog();
+            }
+            catch (Exception ex) { AtlasErrorReporter.Show("Menu failed", "ShowMenu", ex); }
         }
 
         public void OnPingClicked() => _ = Run("Ping", async () =>

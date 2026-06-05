@@ -206,6 +206,10 @@ namespace AtlasCadCore.Forms
                     int attachedFromPickedExisting = 0;
                     int skipped = 0;
                     var unreleasedAfterPicks = new List<MissingPartDto>();
+                    // Parts Atlas refused to overwrite because they already have a
+                    // native (3d_raw) — Upload won't clobber it; Check In revises.
+                    var alreadyPresent = new List<MissingPartDto>(
+                        firstPass.already_present ?? new List<MissingPartDto>());
 
                     if (stillMissing.Count > 0)
                     {
@@ -246,16 +250,51 @@ namespace AtlasCadCore.Forms
                                 filePaths: subset.SelectMany(e => e.AllPaths()));
                             LogUploadResult("picked-existing", pass);
                             attachedFromPickedExisting = pass?.attached?.Count ?? 0;
+                            if (pass?.already_present != null)
+                                alreadyPresent.AddRange(pass.already_present);
                         }
                     }
 
                     progress.Done();
+                    int totalAttached = attachedFirst + attachedFromPickedExisting;
                     var summaryText = new System.Text.StringBuilder();
+                    if (totalAttached == 0 && alreadyPresent.Count > 0 &&
+                        unreleasedAfterPicks.Count == 0 && skipped == 0)
+                    {
+                        // Nothing uploaded — every part already has a native.
+                        summaryText.AppendLine("Nothing uploaded.");
+                        summaryText.AppendLine();
+                        summaryText.AppendLine(
+                            alreadyPresent.Count == 1
+                                ? "This part already has a native (3D file) in Atlas."
+                                : $"All {alreadyPresent.Count} part(s) already have a native (3D file) in Atlas.");
+                        summaryText.AppendLine("Upload won't overwrite an existing native — use Check In to revise it.");
+                        summaryText.AppendLine();
+                        foreach (var m in alreadyPresent.Take(50))
+                            summaryText.AppendLine($"  • {m.part_number}   ({m.filename})");
+                        if (alreadyPresent.Count > 50)
+                            summaryText.AppendLine($"  … {alreadyPresent.Count - 50} more");
+                        MessageBox.Show(summaryText.ToString(),
+                            "Atlas — Nothing to Upload",
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
                     summaryText.AppendLine("Upload complete.");
                     summaryText.AppendLine();
                     summaryText.AppendLine($"Attached to existing part_master entries (auto): {attachedFirst}");
                     if (attachedFromPickedExisting > 0)
                         summaryText.AppendLine($"Attached to existing part_master entries (you picked): {attachedFromPickedExisting}");
+                    if (alreadyPresent.Count > 0)
+                    {
+                        summaryText.AppendLine();
+                        summaryText.AppendLine($"Skipped {alreadyPresent.Count} part(s) that already have a native in Atlas");
+                        summaryText.AppendLine("(Upload won't overwrite — use Check In to revise):");
+                        foreach (var m in alreadyPresent.Take(50))
+                            summaryText.AppendLine($"  • {m.part_number}   ({m.filename})");
+                        if (alreadyPresent.Count > 50)
+                            summaryText.AppendLine($"  … {alreadyPresent.Count - 50} more");
+                    }
                     if (unreleasedAfterPicks.Count > 0)
                     {
                         summaryText.AppendLine();

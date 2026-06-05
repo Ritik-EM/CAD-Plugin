@@ -26,6 +26,7 @@ namespace AtlasCadCore.Forms
         private const string ReleaseType = "PROTO";
 
         private readonly AtlasApiClient _api;
+        private readonly string _contextNote;
 
         private ComboBox _vehicleCombo, _modelCombo, _majorCombo, _minorCombo;
         private ComboBox _aggregateCombo, _subAggregateCombo, _sourceCombo, _availableCombo;
@@ -41,9 +42,12 @@ namespace AtlasCadCore.Forms
 
         public string MintedPartNumber { get; private set; }
 
-        public ReleasePartNumberForm(AtlasApiClient api)
+        /// <param name="contextNote">Optional line shown in the header, e.g. when
+        /// releasing a code for a specific file during the Upload flow.</param>
+        public ReleasePartNumberForm(AtlasApiClient api, string contextNote = null)
         {
             _api = api;
+            _contextNote = contextNote;
             Text = "Atlas — Release Part Code";
             Size = new Size(620, 600);
             StartPosition = FormStartPosition.CenterParent;
@@ -66,6 +70,17 @@ namespace AtlasCadCore.Forms
             Controls.Add(hdr);
 
             int y = 56;
+            if (!string.IsNullOrEmpty(_contextNote))
+            {
+                Controls.Add(new Label
+                {
+                    Location = new Point(20, y), Size = new Size(560, 18),
+                    Text = _contextNote,
+                    ForeColor = Color.FromArgb(0, 70, 140),
+                    Font = new Font(Font, FontStyle.Italic),
+                });
+                y += 24;
+            }
             const int labelX = 20, fieldX = 200, fieldW = 380, rowH = 32;
 
             _vehicleCombo = AddCombo("Vehicle category:", ref y, labelX, fieldX, fieldW, rowH);

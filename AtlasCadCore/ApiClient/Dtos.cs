@@ -168,6 +168,9 @@ namespace AtlasCadCore.ApiClient
     {
         public List<UploadAttachedDto> attached;
         public List<MissingPartDto> missing_parts;
+        /// <summary>Parts skipped because they already have a native (3d_raw) in
+        /// Atlas — Upload won't overwrite; use Check In to revise.</summary>
+        public List<MissingPartDto> already_present;
     }
 
     public class UploadAttachedDto

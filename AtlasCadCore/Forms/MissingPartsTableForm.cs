@@ -90,9 +90,10 @@ namespace AtlasCadCore.Forms
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Filename", Name = "filename", Width = 240, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Attach to (atlas part_number)", Name = "picked", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, ReadOnly = true });
             _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "pick", Text = "Pick Existing…", UseColumnTextForButtonValue = true, Width = 120 });
-            // P7.59: in-plugin create flow. Opens CreateNewPartMasterDialog,
-            // calls atlas-api create_batch, attaches the file to the minted
-            // part_number — no need to leave the plugin for atlas-ui.
+            // In-plugin release flow. Opens ReleasePartNumberForm (the same
+            // full cascading-dropdown release UI as the standalone "Release Part
+            // Code" action), then attaches the file to the minted part_number —
+            // no need to leave the plugin for atlas-ui.
             _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "create", Text = "Create New…", UseColumnTextForButtonValue = true, Width = 110 });
             _grid.Columns.Add(new DataGridViewButtonColumn { HeaderText = "", Name = "clear", Text = "Clear", UseColumnTextForButtonValue = true, Width = 60 });
             _grid.CellContentClick += OnGridButtonClick;
@@ -160,12 +161,17 @@ namespace AtlasCadCore.Forms
             else if (colName == "create")
             {
                 var row = _rows[e.RowIndex];
-                using (var dlg = new CreateNewPartMasterDialog(_api, row.DetectedPartNumber, row.Filename))
+                // Same full release flow as the standalone "Release Part Code"
+                // action (cascading metadata dropdowns + live preview), with a
+                // context line naming the file we're minting a code for.
+                string ctx = $"Releasing a code for file: {row.Filename}"
+                    + (string.IsNullOrEmpty(row.DetectedPartNumber) ? "" : $"   (detected {row.DetectedPartNumber})");
+                using (var dlg = new ReleasePartNumberForm(_api, ctx))
                 {
                     if (dlg.ShowDialog(this) != DialogResult.OK) return;
                     if (string.IsNullOrEmpty(dlg.MintedPartNumber)) return;
                     row.PickedPartNumber = dlg.MintedPartNumber;
-                    row.PickedDescription = $"newly created ({dlg.MintedReleaseType})";
+                    row.PickedDescription = "newly released (PROTO)";
                     _grid.Rows[e.RowIndex].Cells["picked"].Value =
                         $"{row.PickedPartNumber}   —   {row.PickedDescription}";
                 }

@@ -6,42 +6,12 @@
 ' [ClassInterface] attribute on CatiaAddin.cs; regasm.exe writes the
 ' HKCR mapping when the DLL is installed.
 '
-' Until a CAA workbench is built, the macro presents an action menu via
-' InputBox each time it's run — pick an action, the addin runs it,
-' Cancel exits.
+' The addin shows a mouse-clickable action menu (ActionMenuForm) — one
+' button per action. Pick actions with the mouse; Close to exit.
 '
 Language="VBSCRIPT"
 
 Dim atlas
 Set atlas = CreateObject("AtlasCadPlugin.Catia.CatiaAddin")
 atlas.Initialize(CATIA)
-
-Dim prompt
-prompt = "Atlas — pick an action:" & vbCrLf & vbCrLf & _
-         "  1 = Ping (test connection)" & vbCrLf & _
-         "  2 = Upload to Atlas" & vbCrLf & _
-         "  3 = Browse Part Master Library" & vbCrLf & _
-         "  4 = Check In" & vbCrLf & _
-         "  5 = Resolve from Atlas (fetch missing children)" & vbCrLf & _
-         "  6 = My Checkouts" & vbCrLf & _
-         "  7 = Release Part Code" & vbCrLf & _
-         "  8 = Sign Out" & vbCrLf & vbCrLf & _
-         "(Cancel to close)"
-
-Do
-    Dim choice
-    choice = InputBox(prompt, "Atlas", "3")
-    If choice = "" Then Exit Do
-
-    Select Case Trim(choice)
-        Case "1": atlas.OnPingClicked()
-        Case "2": atlas.OnUploadClicked()
-        Case "3": atlas.OnBrowseClicked()
-        Case "4": atlas.OnCheckinClicked()
-        Case "5": atlas.OnResolveClicked()
-        Case "6": atlas.OnMyCheckoutsClicked()
-        Case "7": atlas.OnReleasePartNumberClicked()
-        Case "8": atlas.OnSignOutClicked()
-        Case Else: MsgBox "Invalid choice '" & choice & "'. Enter 1-8.", vbExclamation, "Atlas"
-    End Select
-Loop
+atlas.ShowMenu()
