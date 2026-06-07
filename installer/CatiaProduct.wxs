@@ -125,9 +125,11 @@
 
     <!-- ── Per-user: the launcher macro ─────────────────────────────────
          A per-user component (HKCU keypath under AppDataFolder) so it installs
-         to the installing user's CATStartup. We do NOT RemoveFolder CATStartup
-         on uninstall — it may hold other CATIA startup macros; MSI removes just
-         our Atlas.CATScript file.
+         to the installing user's CATStartup. The RemoveFolder entries below are
+         required by ICE64 (user-profile dirs must be removable); On="uninstall"
+         only deletes a folder when it is EMPTY, so a CATStartup still holding
+         other CATIA startup macros is left untouched — MSI removes just our
+         Atlas.CATScript file.
          NOTE: in a perMachine MSI this materialises for the installing user.
          On a shared multi-user box other users would need a self-repair to get
          the macro; for single-designer laptops (the real case) this is fine. -->
@@ -141,6 +143,14 @@
         <File Id="AtlasCatScript"
               Source="..\AtlasCatiaAddin\Atlas.CATScript"
               Name="Atlas.CATScript" />
+
+        <!-- ICE64: every user-profile directory we author needs a RemoveFile/
+             RemoveFolder entry. On="uninstall" removes each folder only if it
+             is empty, so other macros in CATStartup are preserved. Order is
+             innermost-first. -->
+        <RemoveFolder Id="RemoveCATStartupFolder"       Directory="CATStartupFolder"       On="uninstall" />
+        <RemoveFolder Id="RemoveCATEnvFolder"           Directory="CATEnvFolder"           On="uninstall" />
+        <RemoveFolder Id="RemoveDassaultSystemesFolder" Directory="DassaultSystemesFolder" On="uninstall" />
       </Component>
     </ComponentGroup>
 
