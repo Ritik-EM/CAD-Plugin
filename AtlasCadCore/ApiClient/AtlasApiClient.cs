@@ -37,9 +37,14 @@ namespace AtlasCadCore.ApiClient
 
         public string BaseUrl { get; private set; }
 
-        public AtlasApiClient(string baseUrl)
+        // Which CAD app this client serves — sent as X-Atlas-Cad-Source so the
+        // backend can stamp the cad_transactions audit row (CATIA/SOLIDWORKS/NX).
+        private readonly string _source;
+
+        public AtlasApiClient(string baseUrl, string source = null)
         {
             BaseUrl = baseUrl.TrimEnd('/');
+            _source = source;
         }
 
         internal HttpRequestMessage NewRequest(HttpMethod method, string path)
@@ -48,6 +53,8 @@ namespace AtlasCadCore.ApiClient
             var token = TokenStore.Current();
             if (token != null && !string.IsNullOrEmpty(token.Token))
                 req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+            if (!string.IsNullOrEmpty(_source))
+                req.Headers.Add("X-Atlas-Cad-Source", _source);
             return req;
         }
 

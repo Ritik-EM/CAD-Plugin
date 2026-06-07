@@ -210,6 +210,11 @@ namespace AtlasCadCore.Forms
                     // native (3d_raw) — Upload won't clobber it; Check In revises.
                     var alreadyPresent = new List<MissingPartDto>(
                         firstPass.already_present ?? new List<MissingPartDto>());
+                    // Parts whose 8-char base matched an existing part_master, so
+                    // Atlas minted the file's own revision as a new ACTIVE revision.
+                    // (Also counted in `attached` by the backend.)
+                    var newRevisions = new List<UploadAttachedDto>(
+                        firstPass.new_revisions ?? new List<UploadAttachedDto>());
 
                     if (stillMissing.Count > 0)
                     {
@@ -252,6 +257,8 @@ namespace AtlasCadCore.Forms
                             attachedFromPickedExisting = pass?.attached?.Count ?? 0;
                             if (pass?.already_present != null)
                                 alreadyPresent.AddRange(pass.already_present);
+                            if (pass?.new_revisions != null)
+                                newRevisions.AddRange(pass.new_revisions);
                         }
                     }
 
@@ -285,6 +292,18 @@ namespace AtlasCadCore.Forms
                     summaryText.AppendLine($"Attached to existing part_master entries (auto): {attachedFirst}");
                     if (attachedFromPickedExisting > 0)
                         summaryText.AppendLine($"Attached to existing part_master entries (you picked): {attachedFromPickedExisting}");
+                    if (newRevisions.Count > 0)
+                    {
+                        summaryText.AppendLine();
+                        summaryText.AppendLine($"  ↳ {newRevisions.Count} of these were NEW active revision(s), " +
+                            "created from the file's own revision code (base matched an existing part):");
+                        foreach (var r in newRevisions.Take(50))
+                            summaryText.AppendLine(
+                                $"      • {r.part_number}" +
+                                (string.IsNullOrEmpty(r.previous_part_number) ? "" : $"   (previously {r.previous_part_number})"));
+                        if (newRevisions.Count > 50)
+                            summaryText.AppendLine($"      … {newRevisions.Count - 50} more");
+                    }
                     if (alreadyPresent.Count > 0)
                     {
                         summaryText.AppendLine();
@@ -413,6 +432,8 @@ namespace AtlasCadCore.Forms
             }
             foreach (var m in r.missing_parts ?? new List<MissingPartDto>())
                 LogUpload($"  MISSING (not released on atlas) pn='{m.part_number}' file='{m.filename ?? "-"}'");
+            foreach (var nr in r.new_revisions ?? new List<UploadAttachedDto>())
+                LogUpload($"  NEW REVISION pn='{nr.part_number}' (demoted '{nr.previous_part_number ?? "-"}')");
         }
 
         private static void EnsurePlaceholderPartNumbers(List<AssemblyFileRef> entries)

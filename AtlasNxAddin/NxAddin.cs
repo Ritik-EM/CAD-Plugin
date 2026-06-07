@@ -27,7 +27,7 @@ namespace AtlasCadPlugin.Nx
                 System.Net.ServicePointManager.SecurityProtocol =
                     System.Net.SecurityProtocolType.Tls12 | System.Net.SecurityProtocolType.Tls13;
 
-                _api = new AtlasApiClient(AtlasBaseUrl);
+                _api = new AtlasApiClient(AtlasBaseUrl, "NX");
                 _auth = new AuthService(OctopusBaseUrl);
                 _adapter = new NxAdapter();
 

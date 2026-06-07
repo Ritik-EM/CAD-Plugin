@@ -171,11 +171,20 @@ namespace AtlasCadCore.ApiClient
         /// <summary>Parts skipped because they already have a native (3d_raw) in
         /// Atlas — Upload won't overwrite; use Check In to revise.</summary>
         public List<MissingPartDto> already_present;
+        /// <summary>Parts whose exact revision wasn't in Atlas but whose 8-char
+        /// base matched an existing part_master, so Upload minted the file's
+        /// own revision as a new ACTIVE revision (e.g. file AH1202950F created
+        /// under base AH120295, demoting AH1202950A). Also included in
+        /// <see cref="attached"/>; this list just lets the summary call them out.</summary>
+        public List<UploadAttachedDto> new_revisions;
     }
 
     public class UploadAttachedDto
     {
         public string part_number;
+        /// <summary>For a minted new revision, the previously-active part_number
+        /// that was demoted (null for a plain attach).</summary>
+        public string previous_part_number;
         public ReferenceDocumentsDto reference_documents;
     }
 

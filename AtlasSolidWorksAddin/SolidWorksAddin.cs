@@ -52,7 +52,7 @@ namespace AtlasCadPlugin.SolidWorks
             _addinCookie = Cookie;
             _swApp.SetAddinCallbackInfo2(0, this, _addinCookie);
 
-            _api = new AtlasApiClient(AtlasBaseUrl);
+            _api = new AtlasApiClient(AtlasBaseUrl, "SOLIDWORKS");
             _auth = new AuthService(OctopusBaseUrl);
             _adapter = new SolidWorksAdapter(_swApp);
 

@@ -39,7 +39,7 @@ namespace AtlasCadPlugin.Catia
         public void Initialize(INFITF.Application catApp)
         {
             _catApp = catApp;
-            _api = new AtlasApiClient(AtlasBaseUrl);
+            _api = new AtlasApiClient(AtlasBaseUrl, "CATIA");
             _auth = new AuthService(OctopusBaseUrl);
             _adapter = new CatiaAdapter(_catApp);
 

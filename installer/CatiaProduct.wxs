@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AtlasCadPlugin (CATIA) MSI installer (WiX v3.11 toolset).
+
+  Mirrors Product.wxs (the SolidWorks MSI). Build it with BuildCatiaMsi.cmd,
+  or by hand on Windows (with WiX + the CATIA add-in already built in Release):
+    cd installer
+    candle CatiaProduct.wxs
+    light -ext WixUtilExtension -ext WixUIExtension CatiaProduct.wixobj -out AtlasCatiaPlugin.msi
+
+  Code-sign on Windows (Euler EV cert):
+    signtool sign /a /tr http://timestamp.digicert.com /td sha256 /fd sha256 AtlasCatiaPlugin.msi
+
+  What it does (same three things InstallCatia.cmd did, now as an MSI):
+    1. Copies the CATIA add-in DLLs to %ProgramFiles%\Atlas\Catia
+    2. Runs regasm /codebase on AtlasCatiaAddin.dll — this ALSO writes the
+       SOFTWARE\DELMIA\CATIA\AddIns\{GUID} key via the add-in's
+       [ComRegisterFunction] (CatiaAddin.RegisterFunction), so we don't author
+       that registry key here (unlike the SW MSI which writes its own AddIns key).
+    3. Drops Atlas.CATScript into the user's
+       %APPDATA%\DassaultSystemes\CATEnv\CATStartup so the macro appears in
+       Tools -> Macros (Alt+F8) on the next CATIA start.
+
+  The COM GUID below must match CatiaAddin.cs [Guid(...)].
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  <Product Id="*"
+           Name="Atlas CAD Plugin for CATIA"
+           Language="1033"
+           Version="3.0.4.0"
+           Manufacturer="Euler Motors"
+           UpgradeCode="B3C4D5E6-F7A8-9012-BCDE-F23456789012">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Platform="x64"
+             Description="Atlas CAD integration for CATIA V5" />
+
+    <!-- Same upgrade behaviour as the SW MSI: remove the old version before
+         the new one lands, allow same-version reinstall (hotfix re-runs),
+         block accidental downgrades. -->
+    <MajorUpgrade
+        Schedule="afterInstallInitialize"
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of Atlas CAD Plugin for CATIA is already installed." />
+
+    <!-- Block install while CATIA is running — the DLLs would be locked.
+         CATIA V5's process is CNEXT.exe (NOT "CATIA.exe"); the window title
+         says CATIA but the executable is CNEXT.exe. -->
+    <util:CloseApplication Id="CloseCatia"
+                           Target="CNEXT.exe"
+                           CloseMessage="no"
+                           RebootPrompt="no"
+                           PromptToContinue="yes"
+                           Description="CATIA is open. Close it before installing Atlas CAD Plugin." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="ProductFeature" Title="AtlasCatiaPlugin" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="MacroComponents" />
+    </Feature>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="AtlasDir" Name="Atlas">
+          <Directory Id="INSTALLFOLDER" Name="Catia" />
+        </Directory>
+      </Directory>
+
+      <!-- Per-user CATIA macro startup folder:
+           %APPDATA%\DassaultSystemes\CATEnv\CATStartup -->
+      <Directory Id="AppDataFolder">
+        <Directory Id="DassaultSystemesFolder" Name="DassaultSystemes">
+          <Directory Id="CATEnvFolder" Name="CATEnv">
+            <Directory Id="CATStartupFolder" Name="CATStartup" />
+          </Directory>
+        </Directory>
+      </Directory>
+    </Directory>
+
+    <!-- ── Per-machine: the add-in DLLs (Program Files) ──────────────────
+         The COM DLL gets NO Assembly=".net" (that targets the GAC). regasm
+         (custom action below) writes the CLSID/typelib + the DELMIA AddIns
+         key so CreateObject("AtlasCadPlugin.Catia.CatiaAddin") resolves and
+         the Atlas.CATScript macro can launch the add-in. -->
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="CatiaAddinDll" Guid="*" Win64="yes">
+        <File Id="AtlasCatiaAddinDll"
+              Source="..\AtlasCatiaAddin\bin\Release\AtlasCatiaAddin.dll"
+              KeyPath="yes" />
+      </Component>
+
+      <Component Id="CoreDll" Guid="*" Win64="yes">
+        <File Id="AtlasCadCoreDll"
+              Source="..\AtlasCatiaAddin\bin\Release\AtlasCadCore.dll"
+              KeyPath="yes" />
+      </Component>
+
+      <Component Id="NewtonsoftJsonDll" Guid="*" Win64="yes">
+        <File Id="NewtonsoftJson"
+              Source="..\AtlasCatiaAddin\bin\Release\Newtonsoft.Json.dll"
+              KeyPath="yes" />
+      </Component>
+
+      <!-- CATIA Interop assemblies (the managed wrappers). These are
+           CopyLocal=True in the build, so bin\Release\ already has them.
+           They must ship alongside the add-in so .NET resolves them at load;
+           the COM vtables they wrap are provided by CATIA at runtime. -->
+      <Component Id="InfitfInterop" Guid="*" Win64="yes">
+        <File Source="..\AtlasCatiaAddin\bin\Release\INFITF.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="MecmodInterop" Guid="*" Win64="yes">
+        <File Source="..\AtlasCatiaAddin\bin\Release\MECMOD.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="ProductStructureInterop" Guid="*" Win64="yes">
+        <File Source="..\AtlasCatiaAddin\bin\Release\ProductStructureTypeLib.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="KnowledgewareInterop" Guid="*" Win64="yes">
+        <File Source="..\AtlasCatiaAddin\bin\Release\KnowledgewareTypeLib.dll" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ── Per-user: the launcher macro ─────────────────────────────────
+         A per-user component (HKCU keypath under AppDataFolder) so it installs
+         to the installing user's CATStartup. We do NOT RemoveFolder CATStartup
+         on uninstall — it may hold other CATIA startup macros; MSI removes just
+         our Atlas.CATScript file.
+         NOTE: in a perMachine MSI this materialises for the installing user.
+         On a shared multi-user box other users would need a self-repair to get
+         the macro; for single-designer laptops (the real case) this is fine. -->
+    <ComponentGroup Id="MacroComponents">
+      <Component Id="CatScript" Directory="CATStartupFolder"
+                 Guid="C4D5E6F7-A8B9-0123-CDEF-345678901234">
+        <RegistryValue Root="HKCU"
+                       Key="Software\Atlas\CatiaPlugin"
+                       Name="CatScriptInstalled"
+                       Type="integer" Value="1" KeyPath="yes" />
+        <File Id="AtlasCatScript"
+              Source="..\AtlasCatiaAddin\Atlas.CATScript"
+              Name="Atlas.CATScript" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- COM registration via regasm /codebase (identical pattern to the SW
+         MSI, targeting AtlasCatiaAddin.dll). Deferred + Impersonate=no = runs
+         elevated, since HKLM writes are privileged. Uninstall unregisters,
+         which also removes the DELMIA AddIns key via [ComUnregisterFunction]. -->
+    <SetProperty Id="RegasmInstall"
+                 Value="&quot;[WindowsFolder]Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe&quot; &quot;[INSTALLFOLDER]AtlasCatiaAddin.dll&quot; /codebase"
+                 Sequence="execute" Before="RegasmInstall" />
+    <SetProperty Id="RegasmUninstall"
+                 Value="&quot;[WindowsFolder]Microsoft.NET\Framework64\v4.0.30319\RegAsm.exe&quot; &quot;[INSTALLFOLDER]AtlasCatiaAddin.dll&quot; /unregister"
+                 Sequence="execute" Before="RegasmUninstall" />
+
+    <CustomAction Id="RegasmInstall"
+                  BinaryKey="WixCA"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+    <CustomAction Id="RegasmUninstall"
+                  BinaryKey="WixCA"
+                  DllEntry="WixQuietExec64"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <InstallExecuteSequence>
+      <Custom Action="RegasmInstall" After="InstallFiles">
+        NOT REMOVE
+      </Custom>
+      <Custom Action="RegasmUninstall" Before="RemoveFiles">
+        REMOVE="ALL"
+      </Custom>
+    </InstallExecuteSequence>
+
+    <UIRef Id="WixUI_Minimal" />
+  </Product>
+</Wix>
