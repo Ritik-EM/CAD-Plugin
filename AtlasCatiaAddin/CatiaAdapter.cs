@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using AtlasCadCore.Adapter;
 using AtlasCadCore.Utility;
 using INFITF;
@@ -14,7 +15,7 @@ namespace AtlasCadPlugin.Catia
 {
     public class CatiaAdapter : ICadAdapter, IRevisionDisplayAdapter
     {
-        public const string WalkAssemblyVersion = "2026-06-06-revision-display-v1";
+        public const string WalkAssemblyVersion = "2026-06-10-step-export-memory-safe-v1";
 
         private readonly Application _catApp;
 
@@ -559,6 +560,15 @@ namespace AtlasCadPlugin.Catia
             var result = new List<AssemblyFileRef>();
             var inputs = new List<AssemblyFileRef>(nativeFiles);
 
+            // The tree walk that ran before us leaves thousands of transient COM
+            // RCWs alive (every Products collection + child Product we enumerated
+            // but didn't keep a handle to). On a big assembly that backlog alone
+            // is a large chunk of CATIA-side memory — and we're about to pile a
+            // full-tree STEP tessellation on top of it. Reclaim it ONCE up front
+            // so the heavy exports start from the smallest possible footprint.
+            LogWalk($"ExportStep: {inputs.Count} candidate(s) — reclaiming walk RCWs first");
+            ReclaimMemory();
+
             for (int i = 0; i < inputs.Count; i++)
             {
                 var f = inputs[i];
@@ -568,31 +578,59 @@ namespace AtlasCadPlugin.Catia
                 if (string.IsNullOrEmpty(f.Filename) || string.IsNullOrEmpty(f.FullPath)) continue;
                 string ext = Path.GetExtension(f.Filename).ToLowerInvariant();
                 if (ext != ".catpart" && ext != ".catproduct") continue;
+                bool isAssembly = ext == ".catproduct";
                 progress?.Invoke(i + 1, inputs.Count, f.Filename);
 
                 string stepName = Path.GetFileNameWithoutExtension(f.Filename) + ".stp";
                 string stepPath = Path.Combine(stagingDir, stepName);
+
+                // A .CATProduct export tessellates its ENTIRE subtree in one go —
+                // the single biggest spike of the whole upload (the root assembly
+                // is the worst). Go in with a clean managed heap + no pending RCW
+                // backlog so we don't OOM CATIA mid-export.
+                if (isAssembly) ReclaimMemory();
+
+                LogWalk($"  ExportStep[{i + 1}/{inputs.Count}] {(isAssembly ? "ASSEMBLY" : "part")} " +
+                        $"'{f.Filename}' -> '{stepName}'");
 
                 Document srcDoc = f.NativeHandle as Document;
                 bool opened = false;
                 if (srcDoc == null)
                 {
                     try { srcDoc = _catApp.Documents.Open(f.FullPath); opened = srcDoc != null; }
-                    catch { continue; }
+                    catch (Exception ex) { LogWalk($"    open FAILED: {ex.Message}"); continue; }
                 }
                 if (srcDoc == null) continue;
 
+                bool exportOk = false;
                 try
                 {
                     srcDoc.ExportData(stepPath, "stp");
+                    exportOk = System.IO.File.Exists(stepPath);
+                    if (!exportOk) LogWalk($"    ExportData returned but no file produced");
                 }
-                catch { continue; }
+                catch (Exception ex) { LogWalk($"    ExportData FAILED: {ex.Message}"); }
                 finally
                 {
-                    if (opened) { try { srcDoc.Close(); } catch { } }
+                    // Only close + release documents WE opened here. A srcDoc that
+                    // came from f.NativeHandle is part of the live assembly session
+                    // and is referenced elsewhere — closing/releasing it would
+                    // corrupt the in-memory tree.
+                    if (opened)
+                    {
+                        try { srcDoc.Close(); } catch { }
+                        ReleaseCom(srcDoc);
+                    }
+                    srcDoc = null;
                 }
 
-                if (!System.IO.File.Exists(stepPath)) continue;
+                // Flush the RCWs this iteration produced. Always after an assembly
+                // export (each is huge) or a doc we opened (its RCW graph is now
+                // dead), and periodically for parts so a several-thousand-part
+                // tree doesn't accumulate a giant backlog before any GC runs.
+                if (isAssembly || opened || (i % 25 == 0)) ReclaimMemory();
+
+                if (!exportOk) continue;
 
                 result.Add(new AssemblyFileRef
                 {
@@ -604,6 +642,34 @@ namespace AtlasCadPlugin.Catia
                 });
             }
             return result;
+        }
+
+        // Deterministically release a COM RCW we're done with. Safe because the
+        // addin runs in CATIA's own apartment, so the underlying interface
+        // pointer is released directly — no cross-apartment marshalling (and so
+        // no risk of the finalizer-thread deadlock that cross-apartment release
+        // can cause).
+        private static void ReleaseCom(object comObj)
+        {
+            if (comObj == null) return;
+            try { if (Marshal.IsComObject(comObj)) Marshal.FinalReleaseComObject(comObj); }
+            catch { }
+        }
+
+        // Force the CLR to collect dead managed objects AND run the RCW
+        // finalizers, which is what actually hands the freed CATIA-side memory
+        // back. The double Collect() reclaims objects whose finalizers freed
+        // further references on the first pass. Same-apartment release (see
+        // ReleaseCom) means WaitForPendingFinalizers can't deadlock here.
+        private static void ReclaimMemory()
+        {
+            try
+            {
+                GC.Collect();
+                GC.WaitForPendingFinalizers();
+                GC.Collect();
+            }
+            catch { }
         }
 
         public void InsertComponent(CadDocument activeAssembly, string filePath)
