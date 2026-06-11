@@ -21,14 +21,14 @@ namespace AtlasCadCore.Forms
         private Button _refreshBtn;
         private DataGridView _grid;
         private TextBox _detailBox;
-        private Button _openBtn;
+        private Button _openBtn;      // "Open STEP File" — opens the .stp only
+        private Button _viewBtn;      // "View in <CAD>" — opens native, view-only
         private Button _insertBtn;
         private Button _checkoutBtn;
         private Button _cancelCheckoutBtn;
         private Button _contributeBtn;
         private ToolTip _checkoutTip;
         private ComboBox _revisionCombo;
-        private bool _stpInfoShown;
         private Label _statusLabel;
         private Button _prevPageBtn;
         private Button _nextPageBtn;
@@ -179,19 +179,30 @@ namespace AtlasCadCore.Forms
             _revisionCombo.SelectedIndexChanged += (s, e) => RefreshActionButtonsForSelectedRevision();
             actionPanel.Controls.Add(_revisionCombo);
 
-            _openBtn = new Button { Text = "Open in " + _adapter.CadName, Location = new Point(0, 40), Width = 150, Enabled = false };
-            _openBtn.Click += async (s, e) => await OnOpenAsync();
+            // Row 1 — the two "look at it" actions.
+            // "Open STEP File": opens ONLY the neutral .stp, nothing else.
+            _openBtn = new Button { Text = "Open STEP File", Location = new Point(0, 40), Width = 150, Enabled = false };
+            _openBtn.Click += async (s, e) => await OnOpenStepAsync();
             actionPanel.Controls.Add(_openBtn);
-            _insertBtn = new Button { Text = "Insert into Assembly", Location = new Point(156, 40), Width = 150, Enabled = false };
+            // "View in <CAD>": opens the native (.CATPart/.CATProduct) view-only
+            // — no checkout/lock and no resolve storm.
+            _viewBtn = new Button { Text = "View in " + _adapter.CadName, Location = new Point(156, 40), Width = 150, Enabled = false };
+            _viewBtn.Click += async (s, e) => await OnViewAsync();
+            actionPanel.Controls.Add(_viewBtn);
+
+            // Row 2 — assembly insert + edit/lock.
+            _insertBtn = new Button { Text = "Insert into Assembly", Location = new Point(0, 76), Width = 150, Enabled = false };
             _insertBtn.Click += async (s, e) => await OnInsertAsync();
             actionPanel.Controls.Add(_insertBtn);
-            _checkoutBtn = new Button { Text = "Check Out", Location = new Point(0, 76), Width = 150, Enabled = false };
+            _checkoutBtn = new Button { Text = "Check Out", Location = new Point(156, 76), Width = 150, Enabled = false };
             _checkoutBtn.Click += async (s, e) => await OnCheckoutAsync();
             actionPanel.Controls.Add(_checkoutBtn);
-            _cancelCheckoutBtn = new Button { Text = "Cancel Checkout", Location = new Point(156, 76), Width = 150, Enabled = false };
+
+            // Row 3 — cancel lock + contribute.
+            _cancelCheckoutBtn = new Button { Text = "Cancel Checkout", Location = new Point(0, 112), Width = 150, Enabled = false };
             _cancelCheckoutBtn.Click += async (s, e) => await OnCancelCheckoutAsync();
             actionPanel.Controls.Add(_cancelCheckoutBtn);
-            _contributeBtn = new Button { Text = "Contribute Native File…", Location = new Point(0, 112), Width = 306, Enabled = false };
+            _contributeBtn = new Button { Text = "Contribute Native File…", Location = new Point(156, 112), Width = 150, Enabled = false };
             _contributeBtn.Click += async (s, e) => await OnContributeNativeAsync();
             actionPanel.Controls.Add(_contributeBtn);
             _checkoutTip = new ToolTip();
@@ -323,7 +334,7 @@ namespace AtlasCadCore.Forms
             if (_selected == null)
             {
                 _detailBox.Text = "";
-                _openBtn.Enabled = _insertBtn.Enabled = _checkoutBtn.Enabled = _cancelCheckoutBtn.Enabled = false;
+                _openBtn.Enabled = _viewBtn.Enabled = _insertBtn.Enabled = _checkoutBtn.Enabled = _cancelCheckoutBtn.Enabled = false;
                 return;
             }
 
@@ -346,7 +357,7 @@ namespace AtlasCadCore.Forms
         {
             if (_selected == null)
             {
-                _openBtn.Enabled = _insertBtn.Enabled = _checkoutBtn.Enabled = _cancelCheckoutBtn.Enabled = false;
+                _openBtn.Enabled = _viewBtn.Enabled = _insertBtn.Enabled = _checkoutBtn.Enabled = _cancelCheckoutBtn.Enabled = false;
                 return;
             }
 
@@ -360,6 +371,7 @@ namespace AtlasCadCore.Forms
             var refs = rev?.EffectiveRefs;
             bool hasFile = CountRefs(refs) > 0;
             bool hasNative = !string.IsNullOrEmpty(refs?.Native3dRaw);
+            bool hasStep = !string.IsNullOrEmpty(refs?.Step3d);
             bool hasActiveAssembly = false;
             try
             {
@@ -368,7 +380,9 @@ namespace AtlasCadCore.Forms
             }
             catch { }
 
-            _openBtn.Enabled = hasFile;
+            // "Open STEP File" needs a STEP; "View" needs a native.
+            _openBtn.Enabled = hasStep;
+            _viewBtn.Enabled = hasNative;
             _insertBtn.Enabled = hasFile && hasActiveAssembly;
             _checkoutBtn.Enabled = hasNative;
             _checkoutTip.SetToolTip(_checkoutBtn, hasNative
@@ -378,84 +392,71 @@ namespace AtlasCadCore.Forms
             _contributeBtn.Enabled = _selected != null;
         }
 
-        private async Task OnOpenAsync()
+        // "Open STEP File": download ONLY the neutral .stp for this revision and
+        // open it directly. Nothing else — no native conversion, no child
+        // preflight, no ResolveFromAtlasFlow, no checkout/lock. A STEP is a single
+        // self-contained file, so the whole assembly comes from that one file;
+        // trying to "resolve" its in-memory components against Atlas is what
+        // produced the 67-missing-children prompt and the stacked STEP-import
+        // "Transfer completed" dialogs that hung CATIA.
+        private async Task OnOpenStepAsync()
         {
             string pn = SelectedPartNumber();
             if (pn == null) return;
             try
             {
-                SetBusy(true, "Downloading…");
+                SetBusy(true, "Downloading STEP…");
+                // prefersNative:false → PickAndDownloadAsync returns the Step3d key.
+                var picked = await PickAndDownloadAsync(pn, prefersNative: false);
+                if (picked == null) { Beep("No STEP file in this revision."); return; }
+
+                _adapter.OpenDocument(picked.Path);
+                _statusLabel.Text = $"Opened {Path.GetFileName(picked.Path)} (STEP, view-only).";
+            }
+            catch (Exception ex) { ShowError("Open STEP failed", ex); }
+            finally { SetBusy(false, null); }
+        }
+
+        // "View in <CAD>": open the NATIVE (.CATPart/.CATProduct) for viewing only.
+        // It pre-downloads child natives (preflight only DOWNLOADS files — it never
+        // imports STEPs or prompts, so it can't trigger the resolve-dialog storm),
+        // then opens. It does NOT check the part out (no lock) and does NOT run
+        // ResolveFromAtlasFlow (that per-child STEP-import path is what hangs CATIA).
+        private async Task OnViewAsync()
+        {
+            string pn = SelectedPartNumber();
+            if (pn == null) return;
+            try
+            {
+                SetBusy(true, "Downloading native…");
                 var picked = await PickAndDownloadAsync(pn, prefersNative: true);
-                if (picked == null) { Beep("No openable file in this revision."); return; }
-
-                string openPath = picked.Path;
-                bool convertedFromStep = false;
-
+                if (picked == null) { Beep("No file in this revision."); return; }
                 if (!picked.IsNative)
                 {
-                    string outHint = Path.Combine(
-                        Path.GetDirectoryName(picked.Path),
-                        Path.GetFileNameWithoutExtension(picked.Path)
-                            + _adapter.NativeFileExtensions[0]);
-                    SetBusy(true, "Converting STP to native (local only)…");
-                    openPath = _adapter.ImportStepAsNative(picked.Path, outHint);
-                    convertedFromStep = true;
+                    Beep("No native file in this revision — use “Open STEP File” instead.");
+                    return;
                 }
 
-                // P7.49 preflight (skip for STP-imported — no atlas children).
-                TreeManifestPreflight.PreflightResult preflight = null;
-                if (!convertedFromStep)
+                // Pre-download child natives so an assembly opens resolved. This
+                // only downloads files to their expected paths; no imports, no
+                // prompts. Skipped automatically for single parts (no children).
+                var revForTree = RevisionByPartNumber(pn) ?? LatestActiveRevision(_selected, null);
+                if (revForTree != null)
                 {
-                    var revForTree = RevisionByPartNumber(pn) ?? LatestActiveRevision(_selected, null);
-                    if (revForTree != null)
+                    SetBusy(true, "Pre-downloading assembly children…");
+                    try
                     {
-                        SetBusy(true, "Pre-downloading assembly children…");
-                        try
-                        {
-                            preflight = await TreeManifestPreflight.PreflightAsync(
-                                _api, revForTree, Path.GetDirectoryName(openPath));
-                        }
-                        catch { /* non-fatal */ }
+                        await TreeManifestPreflight.PreflightAsync(
+                            _api, revForTree, Path.GetDirectoryName(picked.Path));
                     }
+                    catch { /* non-fatal */ }
                 }
 
-                _adapter.OpenDocument(openPath);
-                _statusLabel.Text = $"Opened {Path.GetFileName(openPath)}.";
-
-                // Auto-resolve missing children. Same behaviour as Check Out
-                // — if this is an assembly with broken refs, the plugin
-                // downloads each child to its ExpectedPath so subsequent
-                // opens are clean.
-                try
-                {
-                    SetBusy(true, "Resolving child parts from atlas…");
-                    var openedDoc = _adapter.GetActiveDocument();
-                    await ResolveFromAtlasFlow.RunAsync(_api, _adapter, openedDoc, silentIfNothingMissing: true);
-                }
-                catch (Exception ex) { ShowError("Resolve failed", ex); }
-
-                // Manifest-driven report of parts not yet in Atlas (the
-                // authoritative "still to upload" list).
-                SetBusy(false, null);
-                ChildrenToUploadForm.ShowIfAny(preflight?.Missing);
-
-                if (convertedFromStep && !_stpInfoShown)
-                {
-                    _stpInfoShown = true;
-                    SetBusy(false, null);
-                    MessageBox.Show(
-                        $"{pn} has only a STP file in atlas.\n\n" +
-                        "It has been imported into SolidWorks as dumb geometry — " +
-                        "you can view and measure it, but there is no feature " +
-                        "tree to edit parametrically.\n\n" +
-                        "If you have the real source .sldprt / .sldasm for this " +
-                        "part, use the “Contribute Native File” button to upload " +
-                        "it. That will unlock Check Out for everyone.",
-                        "Atlas — Imported from STP",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
+                _adapter.OpenDocument(picked.Path);
+                _statusLabel.Text =
+                    $"Opened {Path.GetFileName(picked.Path)} (view-only, not checked out).";
             }
-            catch (Exception ex) { ShowError("Open failed", ex); }
+            catch (Exception ex) { ShowError("View failed", ex); }
             finally { SetBusy(false, null); }
         }
 

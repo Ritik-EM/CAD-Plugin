@@ -121,7 +121,11 @@ namespace AtlasCadPlugin.Catia
 
         public void OpenDocument(string filePath)
         {
-            _catApp.Documents.Open(filePath);
+            // Suppress CATIA's modal "Transfer completed / CATReport" report that
+            // pops after every neutral-format (STEP/IGES) import. Without this,
+            // opening a STEP — or a flow that imports several — stacks one modal
+            // per file and CATIA appears to hang. No-op/harmless for native opens.
+            WithFileAlertsSuppressed(() => _catApp.Documents.Open(filePath));
         }
 
         // ---- WalkAssembly with skip-reasons + diagnostic log ----
@@ -672,6 +676,44 @@ namespace AtlasCadPlugin.Catia
             catch { }
         }
 
+        // Runs `action` with CATIA's interactive file dialogs suppressed, then
+        // restores the prior state. Application.DisplayFileAlerts = false silences
+        // the modal "Transfer completed" import report (and similar file prompts)
+        // so a STEP import — or a batch of them — doesn't stack dialogs and hang.
+        // Property is read/written by reflection so a differing interop shape
+        // can't break the build; if the property is absent it's a silent no-op.
+        private void WithFileAlertsSuppressed(Action action)
+        {
+            object prev = TryGetDisplayFileAlerts();
+            TrySetDisplayFileAlerts(false);
+            try { action(); }
+            finally { TrySetDisplayFileAlerts(prev is bool b ? b : true); }
+        }
+
+        private object TryGetDisplayFileAlerts()
+        {
+            try
+            {
+                return _catApp.GetType().InvokeMember(
+                    "DisplayFileAlerts",
+                    BindingFlags.GetProperty | BindingFlags.Instance | BindingFlags.Public,
+                    null, _catApp, null);
+            }
+            catch { return null; }
+        }
+
+        private void TrySetDisplayFileAlerts(bool value)
+        {
+            try
+            {
+                _catApp.GetType().InvokeMember(
+                    "DisplayFileAlerts",
+                    BindingFlags.SetProperty | BindingFlags.Instance | BindingFlags.Public,
+                    null, _catApp, new object[] { value });
+            }
+            catch { }
+        }
+
         public void InsertComponent(CadDocument activeAssembly, string filePath)
         {
             var productDoc = (ProductDocument)activeAssembly.NativeHandle;
@@ -681,7 +723,10 @@ namespace AtlasCadPlugin.Catia
 
         public string ImportStepAsNative(string stpPath, string nativeOutPathHint)
         {
-            Document imported = _catApp.Documents.Open(stpPath);
+            Document imported = null;
+            // Same report-dialog suppression as OpenDocument — this path is the
+            // per-child STEP import that the resolve flow can run many times.
+            WithFileAlertsSuppressed(() => imported = _catApp.Documents.Open(stpPath));
             if (imported == null)
                 throw new InvalidOperationException($"CATIA could not import STEP ({stpPath}).");
 
