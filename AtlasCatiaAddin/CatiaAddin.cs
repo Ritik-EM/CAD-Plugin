@@ -27,6 +27,11 @@ namespace AtlasCadPlugin.Catia
         private AuthService _auth;
         private ICadAdapter _adapter;
 
+        // File queued by the Browse window's "Open STEP File" / "View" buttons to
+        // be opened in CATIA AFTER all .NET modal dialogs close — opening it while
+        // a ShowDialog loop is active deadlocks CATIA's STA thread. See ShowMenu.
+        private string _pendingOpenPath;
+
         private const string AtlasBaseUrl = "https://atlas.myeuler.in/";
         private const string OctopusBaseUrl = "https://octopus.eulerlogistics.com";
 
@@ -65,8 +70,23 @@ namespace AtlasCadPlugin.Catia
                     new MenuAction("Release Part Code", OnReleasePartNumberClicked),
                     new MenuAction("Sign Out", OnSignOutClicked),
                 };
+                _pendingOpenPath = null;
                 using (var menu = new ActionMenuForm("Atlas — pick an action", actions))
                     menu.ShowDialog();
+
+                // Perform any deferred CATIA document open now that BOTH the menu
+                // and the Browse window have closed and no .NET modal loop is on
+                // the stack. Doing Documents.Open here — back on CATIA's own
+                // message loop — lets CATIA's interactive STEP import report
+                // display and dismiss normally instead of deadlocking the STA
+                // thread (the "CATIA frozen at 0% CPU after Open STEP File" bug).
+                if (!string.IsNullOrEmpty(_pendingOpenPath))
+                {
+                    string toOpen = _pendingOpenPath;
+                    _pendingOpenPath = null;
+                    try { _adapter.OpenDocument(toOpen); }
+                    catch (Exception ex) { AtlasErrorReporter.Show("Open failed", "ShowMenu.OpenAfterClose", ex); }
+                }
             }
             catch (Exception ex) { AtlasErrorReporter.Show("Menu failed", "ShowMenu", ex); }
         }
@@ -86,7 +106,13 @@ namespace AtlasCadPlugin.Catia
         {
             try
             {
-                using (var form = new BrowsePartMasterForm(_api, _adapter)) { form.ShowDialog(); }
+                using (var form = new BrowsePartMasterForm(_api, _adapter))
+                {
+                    form.ShowDialog();
+                    // Capture the deferred open; ShowMenu performs it once this
+                    // and the menu modal loop have both unwound (see ShowMenu).
+                    _pendingOpenPath = form.OpenAfterClose;
+                }
             }
             catch (UnauthorizedException) { HandleUnauthorized(); }
             catch (Exception ex) { AtlasErrorReporter.Show("Browse failed", "OnBrowseClicked", ex); }

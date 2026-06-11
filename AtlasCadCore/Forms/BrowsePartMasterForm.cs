@@ -392,40 +392,50 @@ namespace AtlasCadCore.Forms
             _contributeBtn.Enabled = _selected != null;
         }
 
+        // The file the host addin should open in CATIA AFTER this dialog (and the
+        // parent action menu) have closed. We must NOT call Documents.Open while a
+        // .NET ShowDialog modal loop is on the stack: opening a STEP (or a native
+        // with broken links) makes CATIA show its own modal dialog, and CATIA's
+        // dialog framework needs CATIA's message loop to service it — which is
+        // starved while a .NET modal loop owns the STA thread. The result is a
+        // hard deadlock (CATIA sits at 0% CPU). So the view actions just record
+        // the path + close; CatiaAddin.ShowMenu opens it once all dialogs are gone.
+        public string OpenAfterClose { get; private set; }
+
         // "Open STEP File": download ONLY the neutral .stp for this revision and
-        // open it directly. Nothing else — no native conversion, no child
-        // preflight, no ResolveFromAtlasFlow, no checkout/lock. A STEP is a single
-        // self-contained file, so the whole assembly comes from that one file;
-        // trying to "resolve" its in-memory components against Atlas is what
-        // produced the 67-missing-children prompt and the stacked STEP-import
-        // "Transfer completed" dialogs that hung CATIA.
+        // hand it back to be opened after the dialog closes. Nothing else — no
+        // native conversion, no child preflight, no ResolveFromAtlasFlow, no
+        // checkout/lock. The whole assembly comes from that one self-contained file.
         private async Task OnOpenStepAsync()
         {
             string pn = SelectedPartNumber();
             if (pn == null) return;
+            string toOpen = null;
             try
             {
                 SetBusy(true, "Downloading STEP…");
                 // prefersNative:false → PickAndDownloadAsync returns the Step3d key.
                 var picked = await PickAndDownloadAsync(pn, prefersNative: false);
                 if (picked == null) { Beep("No STEP file in this revision."); return; }
-
-                _adapter.OpenDocument(picked.Path);
-                _statusLabel.Text = $"Opened {Path.GetFileName(picked.Path)} (STEP, view-only).";
+                toOpen = picked.Path;
             }
-            catch (Exception ex) { ShowError("Open STEP failed", ex); }
+            catch (Exception ex) { ShowError("Open STEP failed", ex); return; }
             finally { SetBusy(false, null); }
+
+            // Defer the CATIA open past the modal loop (see OpenAfterClose).
+            OpenAfterClose = toOpen;
+            Close();
         }
 
         // "View in <CAD>": open the NATIVE (.CATPart/.CATProduct) for viewing only.
-        // It pre-downloads child natives (preflight only DOWNLOADS files — it never
-        // imports STEPs or prompts, so it can't trigger the resolve-dialog storm),
-        // then opens. It does NOT check the part out (no lock) and does NOT run
-        // ResolveFromAtlasFlow (that per-child STEP-import path is what hangs CATIA).
+        // Pre-downloads child natives (preflight only DOWNLOADS files — no imports,
+        // no prompts), then hands the native back to be opened after close. It does
+        // NOT check the part out (no lock) and does NOT run ResolveFromAtlasFlow.
         private async Task OnViewAsync()
         {
             string pn = SelectedPartNumber();
             if (pn == null) return;
+            string toOpen = null;
             try
             {
                 SetBusy(true, "Downloading native…");
@@ -451,13 +461,14 @@ namespace AtlasCadCore.Forms
                     }
                     catch { /* non-fatal */ }
                 }
-
-                _adapter.OpenDocument(picked.Path);
-                _statusLabel.Text =
-                    $"Opened {Path.GetFileName(picked.Path)} (view-only, not checked out).";
+                toOpen = picked.Path;
             }
-            catch (Exception ex) { ShowError("View failed", ex); }
+            catch (Exception ex) { ShowError("View failed", ex); return; }
             finally { SetBusy(false, null); }
+
+            // Defer the CATIA open past the modal loop (see OpenAfterClose).
+            OpenAfterClose = toOpen;
+            Close();
         }
 
         private async Task OnInsertAsync()
