@@ -15,7 +15,7 @@ namespace AtlasCadPlugin.Catia
 {
     public class CatiaAdapter : ICadAdapter, IRevisionDisplayAdapter
     {
-        public const string WalkAssemblyVersion = "2026-06-10-step-export-memory-safe-v1";
+        public const string WalkAssemblyVersion = "2026-06-13-step-export-no-finalizer-deadlock-v2";
 
         private readonly Application _catApp;
 
@@ -660,19 +660,28 @@ namespace AtlasCadPlugin.Catia
             catch { }
         }
 
-        // Force the CLR to collect dead managed objects AND run the RCW
-        // finalizers, which is what actually hands the freed CATIA-side memory
-        // back. The double Collect() reclaims objects whose finalizers freed
-        // further references on the first pass. Same-apartment release (see
-        // ReleaseCom) means WaitForPendingFinalizers can't deadlock here.
+        // Nudge the GC to reclaim dead managed objects (and the CATIA-side memory
+        // their RCWs hold) WITHOUT blocking CATIA's thread.
+        //
+        // CRITICAL: never call GC.WaitForPendingFinalizers() here. This runs on
+        // CATIA's main STA thread, and the assembly tree-walk leaves thousands of
+        // un-released CATIA COM RCWs pending finalization. Each one finalizes on
+        // the CLR finalizer thread, which must marshal its Release back to THIS
+        // STA thread to actually free it. If we block this thread in
+        // WaitForPendingFinalizers (so it stops pumping its message loop), that
+        // marshalled Release can never be serviced — the finalizer thread waits on
+        // us while we wait on it. CATIA deadlocks: frozen at 0% progress, "Not
+        // Responding", Windows offers "Close the program". That is the bug this
+        // method used to CAUSE.
+        //
+        // A plain, non-blocking Collect() is enough: it schedules the finalizers,
+        // and they drain on their own while the export loop keeps pumping the
+        // message loop between files (ProgressForm.SetPhase → Application.DoEvents).
+        // Documents WE open are still freed deterministically via ReleaseCom, which
+        // is a same-apartment FinalReleaseComObject and cannot deadlock.
         private static void ReclaimMemory()
         {
-            try
-            {
-                GC.Collect();
-                GC.WaitForPendingFinalizers();
-                GC.Collect();
-            }
+            try { GC.Collect(); }
             catch { }
         }
 
