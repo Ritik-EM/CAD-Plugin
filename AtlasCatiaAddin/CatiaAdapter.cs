@@ -15,7 +15,17 @@ namespace AtlasCadPlugin.Catia
 {
     public class CatiaAdapter : ICadAdapter, IRevisionDisplayAdapter
     {
-        public const string WalkAssemblyVersion = "2026-06-13-step-export-no-finalizer-deadlock-v2";
+        public const string WalkAssemblyVersion = "2026-06-13-skip-root-assembly-step-v4";
+
+        // ONLY the ROOT assembly's STEP export is disabled — sub-assembly STEPs are
+        // KEPT (the user needs those). Exporting the top assembly to a single STEP
+        // tessellates its ENTIRE 100+-part subtree in one Document.ExportData call,
+        // which consistently hangs CATIA's own STEP writer at "99% — writing file"
+        // (proven by the walk log: the freeze is always on file 1/122, the root).
+        // Each sub-assembly tessellates only its own small subtree and exports fine.
+        // Flip to true to re-enable the root STEP once the assembly load-mode
+        // (cache/visualization vs design) issue is solved.
+        private const bool ExportRootAssemblyStep = false;
 
         private readonly Application _catApp;
 
@@ -583,6 +593,17 @@ namespace AtlasCadPlugin.Catia
                 string ext = Path.GetExtension(f.Filename).ToLowerInvariant();
                 if (ext != ".catpart" && ext != ".catproduct") continue;
                 bool isAssembly = ext == ".catproduct";
+
+                // Skip ONLY the ROOT assembly's STEP — exporting the whole top
+                // assembly in one ExportData call is the proven hang point (CATIA's
+                // writer stalls at "99% writing file"). Sub-assembly STEPs are kept.
+                if (isAssembly && f.IsRoot && !ExportRootAssemblyStep)
+                {
+                    LogWalk($"  ExportStep[{i + 1}/{inputs.Count}] SKIP ROOT assembly STEP " +
+                            $"(whole-tree export hangs CATIA; sub-assembly STEPs kept) '{f.Filename}'");
+                    continue;
+                }
+
                 progress?.Invoke(i + 1, inputs.Count, f.Filename);
 
                 string stepName = Path.GetFileNameWithoutExtension(f.Filename) + ".stp";
