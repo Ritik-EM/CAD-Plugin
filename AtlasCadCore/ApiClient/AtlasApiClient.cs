@@ -147,12 +147,16 @@ namespace AtlasCadCore.ApiClient
         {
             var pathList = filePaths?.Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
                                     .ToList() ?? new List<string>();
-            string sessionId = await StageFilesAsync(pathList, "Upload to part-master");
+            // Stage the BOM tree to S3 alongside the part files so the finalize body
+            // below stays tiny (just the session id). The full tree would otherwise
+            // trip the 8 KB AWS WAF body-size rule for a big assembly.
+            string treeJson = JsonConvert.SerializeObject(tree ?? Enumerable.Empty<object>());
+            string sessionId = await StageFilesAsync(pathList, "Upload to part-master", treeJson);
 
             var payload = new
             {
                 session_id = sessionId,
-                tree = tree,
+                tree = Enumerable.Empty<object>(),   // tree travels via the S3 manifest now
                 release_new_revision = releaseNewRevision,
                 otp = otp ?? "",
             };
@@ -182,12 +186,16 @@ namespace AtlasCadCore.ApiClient
         {
             var pathList = filePaths?.Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
                                     .ToList() ?? new List<string>();
-            string sessionId = await StageFilesAsync(pathList, "Checkin");
+            // Stage the BOM tree to S3 alongside the part files so the finalize body
+            // below stays tiny (just the session id) — the full tree would otherwise
+            // trip the 8 KB AWS WAF body-size rule for a big assembly.
+            string treeJson = JsonConvert.SerializeObject(tree ?? Enumerable.Empty<object>());
+            string sessionId = await StageFilesAsync(pathList, "Checkin", treeJson);
 
             var payload = new
             {
                 session_id = sessionId,
-                tree = tree,
+                tree = Enumerable.Empty<object>(),   // tree travels via the S3 manifest now
                 release_type = releaseType,
                 changed = changed ?? new List<string>(),
                 comment = comment ?? "",
@@ -202,7 +210,18 @@ namespace AtlasCadCore.ApiClient
             return JsonConvert.DeserializeObject<ApiEnvelope<CheckinResultDto>>(body).data;
         }
 
-        public async Task<string> StageFilesAsync(IEnumerable<string> filePaths, string operation)
+        // Filename the BOM tree manifest is staged under in S3 — must match the
+        // atlas-api constant manager.TREE_MANIFEST_FILENAME. The finalize endpoints
+        // read the tree from here so the request body stays under the 8 KB WAF
+        // body-size limit.
+        internal const string TreeManifestFilename = "__tree__.json";
+
+        // Presign filenames in batches of this size so each presign request body
+        // stays well under the WAF 8 KB limit (≈22 B/name → ~2 KB per batch).
+        private const int PresignChunkSize = 100;
+
+        public async Task<string> StageFilesAsync(
+            IEnumerable<string> filePaths, string operation, string treeJson = null)
         {
             var byName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var path in filePaths ?? Enumerable.Empty<string>())
@@ -218,12 +237,31 @@ namespace AtlasCadCore.ApiClient
                 LogUpload($"  stage '{kv.Key}' size={size}B");
             }
 
-            var presign = await PresignUploadAsync(byName.Keys.ToList());
-            if (presign?.uploads == null)
-                throw new InvalidOperationException($"{operation}: presign returned no upload slots");
-            LogUpload($"  presign session={presign.session_id} slots={presign.uploads.Count}");
+            // Names to presign = the part files plus (optionally) the tree manifest.
+            // Presign in small batches — each request body stays under the WAF body-
+            // size limit, and every batch stages into ONE shared session.
+            var names = new List<string>(byName.Keys);
+            bool hasTree = !string.IsNullOrEmpty(treeJson);
+            if (hasTree) names.Add(TreeManifestFilename);
 
-            var puts = presign.uploads
+            string sessionId = null;
+            var slots = new Dictionary<string, PresignedUploadEntryDto>(StringComparer.OrdinalIgnoreCase);
+            int batches = 0;
+            for (int i = 0; i < names.Count; i += PresignChunkSize)
+            {
+                var chunk = names.GetRange(i, Math.Min(PresignChunkSize, names.Count - i));
+                var presign = await PresignUploadAsync(chunk, sessionId);
+                if (presign?.uploads == null || string.IsNullOrEmpty(presign.session_id))
+                    throw new InvalidOperationException($"{operation}: presign returned no upload slots");
+                sessionId = presign.session_id;
+                foreach (var u in presign.uploads)
+                    if (!string.IsNullOrEmpty(u.filename)) slots[u.filename] = u;
+                batches++;
+            }
+            LogUpload($"  presign session={sessionId} slots={slots.Count} in {batches} batch(es)");
+
+            // PUT each part file straight to S3 (direct → bypasses the API WAF).
+            var puts = slots.Values
                 .Where(u => !string.IsNullOrEmpty(u.presigned_url) && byName.ContainsKey(u.filename))
                 .Select(async u =>
                 {
@@ -232,8 +270,20 @@ namespace AtlasCadCore.ApiClient
                 })
                 .ToList();
             await Task.WhenAll(puts);
-            LogUpload($"  staged {puts.Count} file(s) under session {presign.session_id}");
-            return presign.session_id;
+
+            // PUT the BOM tree manifest to S3 too — the finalize request then carries
+            // only the session id, keeping its body under the WAF body-size limit.
+            if (hasTree)
+            {
+                if (!slots.TryGetValue(TreeManifestFilename, out var treeSlot) ||
+                    string.IsNullOrEmpty(treeSlot?.presigned_url))
+                    throw new InvalidOperationException($"{operation}: presign returned no slot for the tree manifest");
+                await PutTextToS3Async(treeSlot.presigned_url, treeJson);
+                LogUpload($"  PUT ok  tree manifest -> {treeSlot.s3_key} ({System.Text.Encoding.UTF8.GetByteCount(treeJson)}B)");
+            }
+
+            LogUpload($"  staged {puts.Count} file(s){(hasTree ? " + tree manifest" : "")} under session {sessionId}");
+            return sessionId;
         }
 
         // Mirrors UploadToPartMasterForm.LogUpload — same %AppData%\AtlasCad\upload.log
@@ -252,11 +302,14 @@ namespace AtlasCadCore.ApiClient
             catch { /* logging must never break the upload */ }
         }
 
-        public async Task<PresignUploadResultDto> PresignUploadAsync(List<string> filenames)
+        public async Task<PresignUploadResultDto> PresignUploadAsync(List<string> filenames, string sessionId = null)
         {
             var req = NewRequest(HttpMethod.Post, "/api/v1/cad/files/presign-upload");
+            object payload = string.IsNullOrEmpty(sessionId)
+                ? (object)new { filenames }
+                : new { filenames, session_id = sessionId };
             req.Content = new StringContent(
-                JsonConvert.SerializeObject(new { filenames }),
+                JsonConvert.SerializeObject(payload),
                 System.Text.Encoding.UTF8, "application/json");
             string body = await SendAsync(req, "Presign upload");
             return JsonConvert.DeserializeObject<ApiEnvelope<PresignUploadResultDto>>(body).data;
@@ -274,6 +327,23 @@ namespace AtlasCadCore.ApiClient
                     string errBody = await resp.Content.ReadAsStringAsync();
                     throw new HttpRequestException(
                         $"S3 PUT failed ({(int)resp.StatusCode}) for {Path.GetFileName(filePath)}: {errBody}");
+                }
+            }
+        }
+
+        // PUTs an in-memory string (the BOM tree manifest) to a presigned S3 URL.
+        // Direct to S3 → bypasses the API WAF, so the tree's size never matters.
+        public async Task PutTextToS3Async(string presignedUrl, string text)
+        {
+            using (var content = new StringContent(text ?? "", System.Text.Encoding.UTF8, "application/json"))
+            using (var req = new HttpRequestMessage(HttpMethod.Put, presignedUrl) { Content = content })
+            {
+                var resp = await _s3Http.SendAsync(req);
+                if (!resp.IsSuccessStatusCode)
+                {
+                    string errBody = await resp.Content.ReadAsStringAsync();
+                    throw new HttpRequestException(
+                        $"S3 PUT (tree manifest) failed ({(int)resp.StatusCode}): {errBody}");
                 }
             }
         }
