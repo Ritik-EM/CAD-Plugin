@@ -142,7 +142,12 @@ namespace AtlasCadPlugin.Altium
             }
             else
             {
-                // Check-in: new revision of an existing part.
+                // Check-in = new revision of an EXISTING part. The backend requires the part to
+                // be checked out (locked) first — otherwise it returns resp_code 1001
+                // "Part X is not checked out". Acquire the lock transparently, then check in
+                // (which bumps the revision AND releases the lock), so "check-in" is self-contained.
+                await EnsureCheckedOutAsync(api, m.part_code, result);
+
                 var node = new
                 {
                     part_number = m.part_code,
@@ -168,6 +173,37 @@ namespace AtlasCadPlugin.Altium
                 result.ok = true;
                 result.message = $"Checked in {m.part_code} ({releaseType}); {result.bumped.Count} revision bump(s).";
                 return result;
+            }
+        }
+
+        /// <summary>
+        /// Ensure the part is checked out by the current user before check-in. If the checkout
+        /// call fails, proceed only if we already hold the lock (idempotent re-run); otherwise
+        /// abort with a clear message (e.g. the part is locked by someone else).
+        /// </summary>
+        private static async Task EnsureCheckedOutAsync(AtlasApiClient api, string partCode, AltiumResult result)
+        {
+            try
+            {
+                await api.CheckoutPartMasterAsync(partCode);
+                return;
+            }
+            catch (Exception ex)
+            {
+                bool weAlreadyHoldIt = false;
+                try
+                {
+                    var mine = await api.MyCheckoutsAsync();
+                    if (mine?.checkouts != null)
+                        weAlreadyHoldIt = mine.checkouts.Any(c =>
+                            string.Equals(c.part_number, partCode, StringComparison.OrdinalIgnoreCase));
+                }
+                catch { /* lookup failed; fall through to abort with the original error */ }
+
+                if (!weAlreadyHoldIt)
+                    throw new Exception($"Cannot check out {partCode} before check-in: {ex.Message}");
+
+                result.warnings.Add($"{partCode} was already checked out by you; proceeding with check-in.");
             }
         }
     }
