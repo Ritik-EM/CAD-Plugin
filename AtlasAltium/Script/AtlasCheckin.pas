@@ -281,14 +281,15 @@ begin
 end;
 
 // Open the template OutJob, read its containers from the INI, and run each one.
-// Returns True only if the OutJob opened and ran; False (caller warns + skips) if the
-// file is not a valid OutJob. The OutJob output base folder is returned via outBaseFolder.
-function RunAllOutputs(const outJobPath, projFolder: String; var outBaseFolder: String): Boolean;
-var ini: TIniFile; grp, idx: Integer; mediumKey, typeKey, name, ctype, basePath: String;
+// Run every enabled container in the OutJob. Returns True if the OutJob opened and ran;
+// False (caller warns + skips) if the file isn't a valid OutJob. The caller harvests the
+// produced files separately (outputs scatter across container subfolders, so we scan the
+// whole project tree rather than guess one output folder here).
+function RunAllOutputs(const outJobPath: String): Boolean;
+var ini: TIniFile; grp, idx: Integer; mediumKey, typeKey, name, ctype: String;
     outJobDoc: IServerDocument;
 begin
     Result := False;
-    outBaseFolder := projFolder + 'Project Outputs\';   // default; refined from INI below
 
     // A hand-authored / wrong-version OutJob makes Altium raise "Unrecognized OutputJob
     // Document Version". Guard so that never crashes the check-in — just skip artifacts.
@@ -305,11 +306,7 @@ begin
 
     ini := TIniFile.Create(outJobPath);   // .OutJob is plain INI text
     try
-        // base output path (relative subfolder under the project)
-        basePath := ini.ReadString('PublishSettings', 'OutputBasePath1', '');
-        if basePath <> '' then outBaseFolder := projFolder + basePath + '\';
-
-        // iterate OutputGroup1..N / OutputMedium1..M
+        // iterate OutputGroup1..N / OutputMedium1..M and run each enabled container
         for grp := 1 to 8 do
             for idx := 1 to 32 do
             begin
@@ -494,7 +491,7 @@ procedure AtlasCheckin;
 var
     Workspace: IWorkspace;
     Project: IProject;
-    partCode, projName, comment, dir, manifestPath, resultPath, outFolder: String;
+    partCode, projName, comment, dir, manifestPath, resultPath: String;
     sourceLines, artifactLines, warnings, outJobPaths: TStringList;
     i, k: Integer;
 begin
@@ -554,15 +551,14 @@ begin
             else
             begin
                 for k := 0 to outJobPaths.Count - 1 do
-                begin
-                    if RunAllOutputs(outJobPaths[k], ExtractFilePath(Project.DM_ProjectFullPath), outFolder) then
-                        HarvestArtifacts(outFolder, artifactLines)
-                    else
+                    if not RunAllOutputs(outJobPaths[k]) then
                         warnings.Add('Could not run OutJob ''' + ExtractFileName(outJobPaths[k]) + ''' (REQ 2 partial).');
-                end;
                 CleanupAfterOutputs;   // close the leftover CAMtastic/output doc
+                // Harvest the whole project tree — OutJob outputs scatter across container
+                // subfolders (e.g. "Project Outputs for STARK_4.2.2", "Generated (Gerber)").
+                HarvestArtifacts(ExtractFilePath(Project.DM_ProjectFullPath), artifactLines);
                 if artifactLines.Count = 0 then
-                    warnings.Add('OutJobs ran but produced no recognized artifacts — check their output folders and that the outputs are enabled (green).');
+                    warnings.Add('OutJobs ran but produced no recognized artifacts — check the outputs are enabled (green) and write under the project folder.');
             end;
         finally
             outJobPaths.Free;
