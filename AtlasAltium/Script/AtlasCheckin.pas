@@ -255,19 +255,27 @@ begin
 end;
 
 // Open the template OutJob, read its containers from the INI, and run each one.
-// Returns the OutJob's output base folder (where artifacts land) via outBaseFolder.
-procedure RunAllOutputs(const outJobPath, projFolder: String; var outBaseFolder: String);
+// Returns True only if the OutJob opened and ran; False (caller warns + skips) if the
+// file is not a valid OutJob. The OutJob output base folder is returned via outBaseFolder.
+function RunAllOutputs(const outJobPath, projFolder: String; var outBaseFolder: String): Boolean;
 var ini: TIniFile; grp, idx: Integer; mediumKey, typeKey, name, ctype, basePath: String;
     outJobDoc: IServerDocument;
 begin
+    Result := False;
     outBaseFolder := projFolder + 'Project Outputs\';   // default; refined from INI below
 
-    outJobDoc := Client.OpenDocument('OUTPUTJOB', outJobPath);
-    if outJobDoc <> nil then
-    begin
-        Client.ShowDocument(outJobDoc);
-        outJobDoc.Focus;                                 { SPIKE: Focus may be required for the run verbs }
+    // A hand-authored / wrong-version OutJob makes Altium raise "Unrecognized OutputJob
+    // Document Version". Guard so that never crashes the check-in — just skip artifacts.
+    outJobDoc := nil;
+    try
+        outJobDoc := Client.OpenDocument('OUTPUTJOB', outJobPath);
+    except
+        outJobDoc := nil;
     end;
+    if outJobDoc = nil then Exit;   // not a valid OutJob -> caller warns + skips REQ 2
+
+    Client.ShowDocument(outJobDoc);
+    outJobDoc.Focus;                                     { SPIKE: Focus may be required for the run verbs }
 
     ini := TIniFile.Create(outJobPath);   // .OutJob is plain INI text
     try
@@ -287,6 +295,7 @@ begin
                 if SameText(ctype, 'PublishToWeb') then Continue;   // skip web publish
                 RunOutputContainer(name, ctype);
             end;
+        Result := True;
     finally
         ini.Free;
     end;
@@ -465,13 +474,16 @@ begin
             else if Pos('|database', sourceLines[i]) > 0 then
                 warnings.Add('A database (.DbLib) library is bundled but needs the external DB to re-open.');
 
-        // 5 — run outputs and harvest. The template OutJob ships beside this script;
-        //     SPIKE: confirm the deployed OutJob path. We look next to the project first.
+        // 5 — run outputs and harvest (REQ 2). Looks for a REAL OutJob named
+        //     Atlas_Template.OutJob beside the project (create it in Altium — a
+        //     hand-authored file fails with "Unrecognized OutputJob Document Version").
         outJobPath := ExtractFilePath(Project.DM_ProjectFullPath) + 'Atlas_Template.OutJob';
         if FileExists(outJobPath) then
         begin
-            RunAllOutputs(outJobPath, ExtractFilePath(Project.DM_ProjectFullPath), outFolder);
-            HarvestArtifacts(outFolder, artifactLines);
+            if RunAllOutputs(outJobPath, ExtractFilePath(Project.DM_ProjectFullPath), outFolder) then
+                HarvestArtifacts(outFolder, artifactLines)
+            else
+                warnings.Add('Atlas_Template.OutJob beside the project is not a valid OutJob — REQ 2 skipped. Create a real one in Altium (File > New > Output Job File).');
         end
         else
             warnings.Add('Atlas_Template.OutJob not found beside the project — no artifacts generated (REQ 2 skipped).');

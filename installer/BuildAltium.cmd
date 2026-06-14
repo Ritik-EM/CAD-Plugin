@@ -38,12 +38,11 @@ if errorlevel 1 goto :error
 copy /Y "%BIN_DIR%\Newtonsoft.Json.dll" "%BRIDGE_DIR%\"
 if errorlevel 1 goto :error
 
-echo === Copying DelphiScript + OutJob template to %SCRIPT_DIR% ===
+echo === Copying DelphiScript to %SCRIPT_DIR% ===
 copy /Y "%SRC_DIR%\Script\AtlasCheckin.pas" "%SCRIPT_DIR%\"
 if errorlevel 1 goto :error
 copy /Y "%SRC_DIR%\Script\AtlasAltium.PrjScr" "%SCRIPT_DIR%\"
 if errorlevel 1 goto :error
-copy /Y "%SRC_DIR%\OutJob\Atlas_Template.OutJob" "%SCRIPT_DIR%\"
 
 echo.
 echo === Done. ===
@@ -51,7 +50,8 @@ echo Bridge installed to: %BRIDGE_DIR%
 echo Script installed to: %SCRIPT_DIR%
 echo Next, in Altium Designer (first time only):
 echo   1. Preferences ^> Scripting System ^> Global Projects ^> Add  %SCRIPT_DIR%\AtlasAltium.PrjScr
-echo   2. Copy Atlas_Template.OutJob into your project folder and enable its outputs.
+echo   2. For REQ 2 artifacts: create a real OutJob named Atlas_Template.OutJob beside your
+echo      .PrjPcb (see AtlasAltium\OutJob\HOW_TO_CREATE_OUTJOB.md). REQ 1 works without it.
 popd
 endlocal
 exit /b 0

@@ -55,7 +55,7 @@ AtlasAltium/
 │   ├── AtlasCheckin.pas        ← the in-Altium check-in script (DelphiScript)
 │   └── AtlasAltium.PrjScr      ← script project (install as a Global Project)
 ├── OutJob/
-│   └── Atlas_Template.OutJob   ← template OutputJob (BOM/PDF/Gerber/STEP) — see note below
+│   └── HOW_TO_CREATE_OUTJOB.md  ← make the real OutJob inside Altium (BOM/PDF/Gerber/STEP)
 └── AtlasAltiumBridge/          ← C# sidecar (.NET 4.8 WinExe), added to AtlasCadPlugin.sln
     ├── AtlasAltiumBridge.csproj
     ├── Program.cs               ← [STAThread] entry: load manifest, auth, run, write result
@@ -98,20 +98,16 @@ Written by `AtlasCheckin.pas`, read by `AtlasAltiumBridge.exe`. Exchange dir:
 `bucket` values: `file` (copyable, bundled), `managed` (Altium-365 server library — **not**
 bundled, warned), `database` (`.DbLib` — bundled but needs the external DB, warned).
 
-## The template OutJob — important
+## The OutJob — important
 
-`OutJob/Atlas_Template.OutJob` is a **starting point**, not a drop-in. Output containers must be
-**enabled** ("green-lit") *inside Altium* — that cannot be forced from a script. Open it in
-Altium, point each container's output folder at the project's `Project Outputs` dir, and make
-sure four outputs exist and are enabled:
+The OutJob **must be created inside Altium** — a hand-authored file fails with *"Unrecognized
+OutputJob Document Version"*. Create one per project, named **`Atlas_Template.OutJob`** beside
+the `.PrjPcb`, with four enabled (green-lit) outputs — BOM, Schematic Prints (PDF), Gerber +
+NC Drill, and Export STEP. Full steps: **`OutJob/HOW_TO_CREATE_OUTJOB.md`**.
 
-- **Bill of Materials** (Report Output → CSV/XLSX)
-- **Schematic Prints** (Publish → PDF)
-- **Gerber Files** + **NC Drill Files** (Fabrication Outputs)
-- **Export STEP** (Export Output) — requires the **STEP/MBASTEP** installer extension enabled
-
-The script runs *every enabled container* in the OutJob, then harvests the output folder and
+The script runs *every enabled container* in that OutJob, then harvests the output folder and
 classifies files by extension — so you don't have to keep container names in sync with code.
+Until the OutJob exists, check-in still works and just skips artifact generation (REQ 1 only).
 
 ## Deploy
 
