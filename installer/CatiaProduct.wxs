@@ -188,5 +188,7 @@
     </InstallExecuteSequence>
 
     <UIRef Id="WixUI_Minimal" />
+    <!-- Real license text instead of WiX's built-in lorem-ipsum placeholder. -->
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
   </Product>
 </Wix>

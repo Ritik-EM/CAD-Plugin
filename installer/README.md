@@ -5,9 +5,15 @@ relevant addin in Release and produces (or installs) a ready-to-use artifact:
 
 | Script | Target CAD | Output |
 |---|---|---|
-| `BuildSolidWorks.cmd` | SolidWorks | `AtlasCadPlugin-SolidWorks.msi` — distributable MSI |
+| `BuildSolidWorks.cmd` | SolidWorks | `AtlasCadPlugin-SolidWorks.msi` — distributable MSI (from `Product.wxs`) |
+| `BuildCatiaMsi.cmd` | CATIA V5 | `dist\AtlasCatiaPlugin.msi` — distributable MSI (from `CatiaProduct.wxs`) |
 | `BuildCatia.cmd` | CATIA V5 | Registered COM addin under `%ProgramFiles%\Atlas\Catia\` + macro under CATStartup (installs locally) |
 | `BuildNx.cmd` | Siemens NX | DLLs + `atlas.men` dropped into `%UGII_USER_DIR%\startup\` (installs locally) |
+| `BuildAltium.cmd` | Altium Designer | Builds + installs locally (binaries + script + watcher autostart) |
+| `BuildAltiumMsi.cmd` | Altium Designer | `dist\AtlasAltiumPlugin.msi` — distributable MSI (from `AltiumProduct.wxs`) |
+
+All MSIs share `License.rtf` for the install license page (`<WixVariable Id="WixUILicenseRtf">`),
+so none of them shows WiX's built-in *lorem ipsum* placeholder.
 
 SW has a real MSI installer because end users install it on their own machines.
 CATIA and NX use direct local-install scripts because their typical deployment
@@ -61,6 +67,26 @@ BuildNx.cmd
 ```
 
 Copies the addin DLL + `atlas.men` into `%UGII_USER_DIR%\startup\`. Restart NX — the Atlas menu appears.
+
+## Build + ship — Altium (MSI)
+
+```cmd
+cd installer
+BuildAltiumMsi.cmd
+```
+
+Produces `dist\AtlasAltiumPlugin.msi`. Unlike CATIA/SW, Altium has **no COM add-in**, so the
+MSI just lays down files + a Startup shortcut (no `regasm`). It:
+
+- installs the bridge (`AtlasAltiumBridge.exe` + 2 DLLs) to `C:\Users\Public\AtlasAltium`,
+- installs the DelphiScript to `%LOCALAPPDATA%\Atlas\Altium`,
+- adds a Startup shortcut for the watcher (`AtlasAltiumBridge.exe --watch`) and offers to start
+  it now (an ExitDialog checkbox).
+
+**One manual step remains per user** (Altium has no script-install hook): in Altium,
+*Preferences → Scripting System → Global Projects → Add* `…\Atlas\Altium\AtlasAltium.PrjScr`,
+then bind `AtlasCheckin` to a toolbar button. After that, check-in is one button click — the
+script signals the resident watcher, which uploads in the background.
 
 ## Auto-update
 
