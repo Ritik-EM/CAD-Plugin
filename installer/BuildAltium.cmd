@@ -30,6 +30,14 @@ if errorlevel 1 goto :error
 if not exist "%BRIDGE_DIR%" mkdir "%BRIDGE_DIR%"
 if not exist "%SCRIPT_DIR%" mkdir "%SCRIPT_DIR%"
 
+REM Stop any running watcher FIRST — it locks AtlasAltiumBridge.exe (so the copy below
+REM would fail) and holds the single-instance mutex (so a fresh start would just exit).
+REM Without this, a rebuild silently keeps running the OLD bridge (e.g. a stale base URL).
+echo === Stopping any running watcher ===
+taskkill /F /IM AtlasAltiumBridge.exe >nul 2>nul
+REM tiny pause so the file lock is released before we copy
+ping -n 2 127.0.0.1 >nul 2>nul
+
 echo === Copying bridge EXE + dependencies to %BRIDGE_DIR% ===
 copy /Y "%BIN_DIR%\AtlasAltiumBridge.exe" "%BRIDGE_DIR%\"
 if errorlevel 1 goto :error
