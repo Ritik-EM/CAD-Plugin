@@ -90,18 +90,27 @@ script signals the resident watcher, which uploads in the background.
 
 ## Auto-update
 
-The plugin polls `/api/v1/cad/version/latest` on startup. If the backend reports a newer version than the loaded assembly, a non-blocking dialog tells the user to close their CAD app and run the freshly-downloaded MSI.
+`AutoUpdater.CheckAsync` polls `GET /api/v1/cad/version/latest`; if the backend reports a
+newer version than the loaded `AtlasCadCore` assembly, it downloads the MSI and a non-blocking
+dialog tells the user to quit their CAD app and run it. The endpoint is **source-aware** — it
+returns the right MSI per `X-Atlas-Cad-Source` header via `_LATEST_BY_SOURCE` in
+`atlas-api app/api/cad/v1/resource.py`. **SolidWorks, CATIA, and Altium** all participate
+(NX returns `version: null`, so its updater no-ops).
 
-To ship a new SolidWorks version:
+- **SolidWorks/CATIA** check on add-in startup; **Altium** checks once per watcher session
+  (on the first check-in, after auth) — same `AutoUpdater`, same flow.
 
-1. Bump `Version` in `Product.wxs` (e.g. `1.0.0.0` → `1.0.1.0`).
-2. Bump `AssemblyVersion` + `AssemblyFileVersion` in **both** `AtlasSolidWorksAddin/Properties/AssemblyInfo.cs` and `AtlasCadCore/Properties/AssemblyInfo.cs` — they must match `Product.wxs` or the version compare in `AutoUpdater.cs` won't fire.
-3. `BuildSolidWorks.cmd`
-4. Upload to S3: `aws s3 cp AtlasCadPlugin-SolidWorks.msi s3://atlas-app-docs/cad/installers/AtlasCadPlugin-1.0.1.msi`
-5. Update `plugin_latest_version` + `plugin_installer_s3_key` in `atlas-api`'s settings (env vars on prod or `app/core/settings.py`).
-6. Restart `atlas-api`. Existing engineers pick up the new MSI on their next SolidWorks restart.
+To ship a new version (e.g. Altium):
 
-CATIA + NX don't currently use auto-update — re-run `BuildCatia.cmd` / `BuildNx.cmd` on each engineer's machine when a new version ships, or wrap them in an MSI later.
+1. Bump `Version` in the `.wxs` (e.g. `AltiumProduct.wxs`) **and** `AssemblyVersion`/`AssemblyFileVersion`
+   in **both** the addin's `Properties/AssemblyInfo.cs` and `AtlasCadCore/Properties/AssemblyInfo.cs`
+   — `AutoUpdater` compares against `AtlasCadCore`'s version, so it must match.
+2. Build the MSI (`BuildAltiumMsi.cmd`).
+3. Upload to S3 at the key the backend expects:
+   `aws s3 cp dist\AtlasAltiumPlugin.msi s3://atlas-app-docs/cad/installers/AtlasAltiumPlugin.msi`
+4. Bump the `version` for that source in `_LATEST_BY_SOURCE` (`resource.py`) and **deploy `atlas-api`**.
+
+Engineers pick up the new MSI on their next session (SW/CATIA: CAD restart; Altium: next check-in).
 
 ## Test installation
 

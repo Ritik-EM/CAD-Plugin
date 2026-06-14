@@ -38,6 +38,8 @@ namespace AtlasCadPlugin.Altium
         private const string PartCodeName   = "current_part_code.txt";
         private const string WatcherMutex   = "AtlasAltiumBridgeWatcher";   // single-instance (per session)
 
+        private static bool _updateChecked;   // auto-update runs once per process
+
         [STAThread]
         private static int Main(string[] args)
         {
@@ -155,6 +157,17 @@ namespace AtlasCadPlugin.Altium
                 }
 
                 var api = new AtlasApiClient(AtlasBaseUrl, "Altium");
+
+                // Auto-update: once per process (after auth), check for a newer Altium MSI.
+                // Best-effort + non-blocking (it downloads + prompts on a background thread),
+                // so it never delays the check-in. The backend keys the latest version off the
+                // X-Atlas-Cad-Source: Altium header this client already sends.
+                if (!_updateChecked)
+                {
+                    _updateChecked = true;
+                    _ = AutoUpdater.CheckAsync(api);
+                }
+
                 var result = AltiumCheckinFlow.RunAsync(api, manifest, exchangeDir)
                                               .GetAwaiter().GetResult();
                 WriteResultObject(exchangeDir, result);
