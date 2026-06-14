@@ -46,14 +46,15 @@
         AllowSameVersionUpgrades="yes"
         DowngradeErrorMessage="A newer version of Atlas CAD Plugin for Altium is already installed." />
 
-    <!-- The watcher (the bridge run in watch mode) holds the EXE/DLLs open, so close it
-         before an install/upgrade or the files would be locked. -->
+    <!-- The watcher (the bridge run in watch mode) holds the EXE/DLLs open, so STOP it
+         automatically before an install/upgrade. The watcher is headless (no window), so a
+         graceful WM_CLOSE can't reach it; TerminateProcess force-stops it. The install then
+         restarts it (ExitDialog checkbox / Startup shortcut), so the user does nothing. -->
     <util:CloseApplication Id="CloseWatcher"
                            Target="AtlasAltiumBridge.exe"
-                           CloseMessage="no"
+                           TerminateProcess="0"
                            RebootPrompt="no"
-                           PromptToContinue="yes"
-                           Description="The Atlas Altium watcher is running. Close it before installing." />
+                           Description="Stopping the Atlas Altium watcher to install the update." />
 
     <MediaTemplate EmbedCab="yes" />
 
