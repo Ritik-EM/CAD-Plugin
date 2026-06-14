@@ -28,7 +28,7 @@
   <Product Id="*"
            Name="Atlas CAD Plugin for CATIA"
            Language="1033"
-           Version="3.0.4.0"
+           Version="3.0.5.0"
            Manufacturer="Euler Motors"
            UpgradeCode="B3C4D5E6-F7A8-9012-BCDE-F23456789012">
 

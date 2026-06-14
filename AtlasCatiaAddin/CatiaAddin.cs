@@ -44,6 +44,10 @@ namespace AtlasCadPlugin.Catia
         public void Initialize(INFITF.Application catApp)
         {
             _catApp = catApp;
+            // Pin the reported version to THIS add-in's own assembly (independent of
+            // SolidWorks/NX/Altium and of AtlasCadCore). Must precede the first
+            // AtlasApiClient/AuthService use, which bake it into a static User-Agent.
+            PluginVersion.SetHost(typeof(CatiaAddin).Assembly);
             _api = new AtlasApiClient(AtlasBaseUrl, "CATIA");
             _auth = new AuthService(OctopusBaseUrl);
             _adapter = new CatiaAdapter(_catApp);

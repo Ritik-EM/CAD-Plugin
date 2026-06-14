@@ -27,9 +27,12 @@ namespace AtlasCadCore.ApiClient
         {
             var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
             string ver = PluginVersion.Current?.ToString(3) ?? "dev";
+            // No CAD name here — the host is identified per-request by the
+            // X-Atlas-Cad-Source header (NewRequest), so the shared static client
+            // must stay CAD-neutral instead of hardcoding one product.
             http.DefaultRequestHeaders.UserAgent.ParseAdd(
-                $"AtlasCadPlugin/{ver} (.NET 4.8; SolidWorks)");
-            
+                $"AtlasCadPlugin/{ver} (.NET 4.8)");
+
             http.DefaultRequestHeaders.Add("X-Atlas-Plugin", $"AtlasCadPlugin/{ver}");
             http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
             return http;

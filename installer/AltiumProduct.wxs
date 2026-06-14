@@ -31,7 +31,7 @@
   <Product Id="*"
            Name="Atlas CAD Plugin for Altium"
            Language="1033"
-           Version="3.0.4.0"
+           Version="1.0.0.0"
            Manufacturer="Euler Motors"
            UpgradeCode="9D3E5C7A-1B2F-4A8C-9E0D-7F1A2B3C4D5E">
 

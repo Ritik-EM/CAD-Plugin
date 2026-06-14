@@ -48,6 +48,11 @@ namespace AtlasCadPlugin.Altium
             ServicePointManager.SecurityProtocol =
                 SecurityProtocolType.Tls12 | SecurityProtocolType.Tls13;
 
+            // Pin the reported version to THIS bridge's own assembly (independent of
+            // CATIA/SolidWorks/NX and of AtlasCadCore). Must precede the first
+            // AtlasApiClient/AuthService use, which bake it into a static User-Agent.
+            PluginVersion.SetHost(typeof(Program).Assembly);
+
             return HasFlag(args, "--watch") ? RunWatch() : RunOnce(args);
         }
 

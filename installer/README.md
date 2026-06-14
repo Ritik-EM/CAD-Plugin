@@ -91,20 +91,27 @@ script signals the resident watcher, which uploads in the background.
 ## Auto-update
 
 `AutoUpdater.CheckAsync` polls `GET /api/v1/cad/version/latest`; if the backend reports a
-newer version than the loaded `AtlasCadCore` assembly, it downloads the MSI and a non-blocking
-dialog tells the user to quit their CAD app and run it. The endpoint is **source-aware** — it
-returns the right MSI per `X-Atlas-Cad-Source` header via `_LATEST_BY_SOURCE` in
+newer version than the running add-in, it downloads the MSI and a non-blocking dialog tells
+the user to quit their CAD app and run it. The endpoint is **source-aware** — it returns the
+right MSI per `X-Atlas-Cad-Source` header via `_LATEST_BY_SOURCE` in
 `atlas-api app/api/cad/v1/resource.py`. **SolidWorks, CATIA, and Altium** all participate
 (NX returns `version: null`, so its updater no-ops).
 
 - **SolidWorks/CATIA** check on add-in startup; **Altium** checks once per watcher session
   (on the first check-in, after auth) — same `AutoUpdater`, same flow.
 
-To ship a new version (e.g. Altium):
+**Each add-in's version is independent.** `AutoUpdater` compares the backend's per-source
+`latest` against the **host add-in's own** `AssemblyVersion` — NOT `AtlasCadCore`'s. Each host
+calls `PluginVersion.SetHost(typeof(<Addin>).Assembly)` at startup (see each entry point), so
+CATIA, SolidWorks, NX, and Altium version independently: bumping one never moves the others.
+`AtlasCadCore`'s own version is only a fallback if a host forgets that call.
 
-1. Bump `Version` in the `.wxs` (e.g. `AltiumProduct.wxs`) **and** `AssemblyVersion`/`AssemblyFileVersion`
-   in **both** the addin's `Properties/AssemblyInfo.cs` and `AtlasCadCore/Properties/AssemblyInfo.cs`
-   — `AutoUpdater` compares against `AtlasCadCore`'s version, so it must match.
+To ship a new version (e.g. Altium) — touches **only that one CAD**:
+
+1. Bump `Version` in **that CAD's** `.wxs` (e.g. `AltiumProduct.wxs`) **and**
+   `AssemblyVersion`/`AssemblyFileVersion` in **that add-in's** `Properties/AssemblyInfo.cs`
+   (e.g. `AtlasAltium/AtlasAltiumBridge/Properties/AssemblyInfo.cs`). Do **not** touch
+   `AtlasCadCore` or any other add-in.
 2. Build the MSI (`BuildAltiumMsi.cmd`).
 3. Upload to S3 at the key the backend expects:
    `aws s3 cp dist\AtlasAltiumPlugin.msi s3://atlas-app-docs/cad/installers/AtlasAltiumPlugin.msi`

@@ -27,6 +27,10 @@ namespace AtlasCadPlugin.Nx
                 System.Net.ServicePointManager.SecurityProtocol =
                     System.Net.SecurityProtocolType.Tls12 | System.Net.SecurityProtocolType.Tls13;
 
+                // Pin the reported version to THIS add-in's own assembly (independent of
+                // CATIA/SolidWorks/Altium and of AtlasCadCore). Must precede the first
+                // AtlasApiClient/AuthService use, which bake it into a static User-Agent.
+                PluginVersion.SetHost(typeof(NxAddin).Assembly);
                 _api = new AtlasApiClient(AtlasBaseUrl, "NX");
                 _auth = new AuthService(OctopusBaseUrl);
                 _adapter = new NxAdapter();

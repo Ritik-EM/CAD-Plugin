@@ -22,8 +22,10 @@ namespace AtlasCadCore.Auth
         {
             var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
             string ver = PluginVersion.Current?.ToString(3) ?? "dev";
+            // CAD-neutral User-Agent — the host is identified elsewhere; don't
+            // hardcode one product into the shared static auth client.
             http.DefaultRequestHeaders.UserAgent.ParseAdd(
-                $"AtlasCadPlugin/{ver} (.NET 4.8; SolidWorks)");
+                $"AtlasCadPlugin/{ver} (.NET 4.8)");
             http.DefaultRequestHeaders.Add("X-Atlas-Plugin", $"AtlasCadPlugin/{ver}");
             http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
             return http;

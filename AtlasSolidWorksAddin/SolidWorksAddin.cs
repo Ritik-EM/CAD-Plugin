@@ -52,6 +52,10 @@ namespace AtlasCadPlugin.SolidWorks
             _addinCookie = Cookie;
             _swApp.SetAddinCallbackInfo2(0, this, _addinCookie);
 
+            // Pin the reported version to THIS add-in's own assembly (independent of
+            // CATIA/NX/Altium and of AtlasCadCore). Must precede the first
+            // AtlasApiClient/AuthService use, which bake it into a static User-Agent.
+            PluginVersion.SetHost(typeof(SolidWorksAddin).Assembly);
             _api = new AtlasApiClient(AtlasBaseUrl, "SOLIDWORKS");
             _auth = new AuthService(OctopusBaseUrl);
             _adapter = new SolidWorksAdapter(_swApp);
