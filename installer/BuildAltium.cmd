@@ -44,14 +44,30 @@ if errorlevel 1 goto :error
 copy /Y "%SRC_DIR%\Script\AtlasAltium.PrjScr" "%SCRIPT_DIR%\"
 if errorlevel 1 goto :error
 
+echo === Installing the watcher autostart shortcut ===
+REM Create a Startup-folder shortcut that runs the bridge in --watch mode at login, so
+REM check-in is one click in Altium (the script signals the always-running watcher).
+set STARTUP=%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup
+powershell -NoProfile -Command ^
+  "$s=(New-Object -ComObject WScript.Shell).CreateShortcut('%STARTUP%\Atlas Altium Watcher.lnk');" ^
+  "$s.TargetPath='%BRIDGE_DIR%\AtlasAltiumBridge.exe'; $s.Arguments='--watch';" ^
+  "$s.WorkingDirectory='%BRIDGE_DIR%'; $s.Description='Atlas Altium check-in watcher'; $s.Save()"
+if errorlevel 1 echo *** WARNING: could not create the Startup shortcut (create it manually). ***
+
+echo === Starting the watcher now (a second instance just exits) ===
+start "" "%BRIDGE_DIR%\AtlasAltiumBridge.exe" --watch
+
 echo.
 echo === Done. ===
 echo Bridge installed to: %BRIDGE_DIR%
 echo Script installed to: %SCRIPT_DIR%
+echo Watcher: started now + set to auto-start at login (Startup shortcut "Atlas Altium Watcher").
 echo Next, in Altium Designer (first time only):
 echo   1. Preferences ^> Scripting System ^> Global Projects ^> Add  %SCRIPT_DIR%\AtlasAltium.PrjScr
-echo   2. For REQ 2 artifacts: create a real OutJob named Atlas_Template.OutJob beside your
-echo      .PrjPcb (see AtlasAltium\OutJob\HOW_TO_CREATE_OUTJOB.md). REQ 1 works without it.
+echo      (then bind AtlasCheckin to a toolbar button, or run it via File ^> Run Script).
+echo   2. For REQ 2 STEP: add an "Export STEP" output to an OutJob and enable it
+echo      (see AtlasAltium\OutJob\HOW_TO_CREATE_OUTJOB.md). REQ 1 works without it.
+echo   To stop the watcher: end "AtlasAltiumBridge.exe" in Task Manager.
 popd
 endlocal
 exit /b 0

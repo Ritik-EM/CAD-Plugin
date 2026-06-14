@@ -29,11 +29,12 @@ The C# side reuses the **exact same** proven upload pipeline as the other three 
 (`AtlasApiClient`, S3 presign/PUT staging, `AuthService`/`TokenStore`, `FileHashing`,
 the DTOs). Secrets and HTTPS never touch the DelphiScript.
 
-> **Launching the bridge:** this Altium build's DelphiScript does not expose
-> `CreateOleObject`/`ShellExecute`, so the script can't start the bridge `.exe` directly. The
-> script writes `manifest.json` and the bridge is run separately (manually, or via a Windows
-> Startup shortcut / folder-watcher). One-click auto-launch is a TODO — see `AtlasCheckin.pas`
-> `LaunchBridge`.
+> **One-click via the watcher:** this Altium build's DelphiScript can't launch an EXE
+> (no `CreateOleObject`/`ShellExecute`), so the bridge runs as a resident **watcher**
+> (`AtlasAltiumBridge.exe --watch`, auto-started at login). The script writes `manifest.json`,
+> then a `request.trigger`; the watcher picks it up and uploads in the background. So check-in
+> is one button click in Altium. The bridge also still supports a one-shot `--manifest <path>`
+> mode for debugging.
 
 ## ECAD model: one project = one part code
 
@@ -141,14 +142,30 @@ On the Windows build box (VS 2022 Developer Command Prompt):
 installer\BuildAltium.cmd
 ```
 
-This builds `AtlasAltiumBridge` in Release and installs to two fixed locations:
-- **bridge EXE + DLLs + exchange files** → `C:\Users\Public\AtlasAltium` (fixed path, because
-  DelphiScript can't read env vars to locate it).
-- **script + OutJob** → `%LOCALAPPDATA%\Atlas\Altium` (where the Global Project points).
+This builds `AtlasAltiumBridge` in Release and:
+- installs the **bridge EXE + DLLs** → `C:\Users\Public\AtlasAltium` (fixed path; also the
+  manifest/result exchange dir, because DelphiScript can't read env vars to locate it),
+- installs the **script** → `%LOCALAPPDATA%\Atlas\Altium` (where the Global Project points),
+- creates a **Startup shortcut** (`Atlas Altium Watcher`) running `AtlasAltiumBridge.exe --watch`,
+  and **starts the watcher now**.
 
-Then, in Altium: **Preferences → Scripting System → Global Projects → Add**
-`%LOCALAPPDATA%\Atlas\Altium\AtlasAltium.PrjScr`. To run it, use **File → Run Script** (pick
-`AtlasCheckin`), or bind it to a button via right-click toolbar → Customize.
+Then, in Altium (first time only): **Preferences → Scripting System → Global Projects → Add**
+`%LOCALAPPDATA%\Atlas\Altium\AtlasAltium.PrjScr`, and bind `AtlasCheckin` to a toolbar button
+(right-click toolbar → Customize) — or just run it via **File → Run Script**.
+
+### The watcher (one-click check-in)
+`AtlasAltiumBridge.exe --watch` runs resident (auto-started at login). It:
+- is **single-instance** (a named mutex; a second `--watch` just exits),
+- writes `watcher.alive` each loop so the script can tell it's running (and warns you if not),
+- polls the exchange dir for `request.trigger`, processes the request, and shows a result dialog
+  **without blocking** the loop,
+- **isolates failures** per request (a bad manifest / network error / expired session is reported
+  and the watcher keeps running; an expired token re-prompts login on the next check-in).
+
+**Everyday flow:** click your "Check in to Atlas" button in Altium → done. The watcher waits for
+the OutJob outputs to finish generating, then uploads. **To stop it:** end `AtlasAltiumBridge.exe`
+in Task Manager. A force-kill leaves a stale `watcher.alive`; it's refreshed when the watcher
+restarts.
 
 ## Spikes to run before trusting this (on your real Altium)
 

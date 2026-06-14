@@ -436,33 +436,35 @@ begin
     end;
 end;
 
-{ ---------- 7: launch the bridge ---------- }
+{ ---------- 7: hand off to the watcher ---------- }
 
-procedure LaunchBridge(const manifestPath: String);
+// DelphiScript on this Altium build can't launch an external EXE (no CreateOleObject/
+// ShellExecute), so instead of running the bridge we SIGNAL the always-running watcher:
+// write the trigger file AFTER the manifest, so the watcher only ever reads a complete
+// manifest. The watcher (AtlasAltiumBridge.exe --watch) picks it up and uploads in the
+// background. If the watcher isn't running, warn and fall back to running the EXE manually.
+procedure SignalWatcher(const manifestPath: String);
+var dir: String; ts: TStringList;
 begin
-    // DelphiScript on this Altium build does NOT expose CreateOleObject (or ShellExecute),
-    // so the script can't launch an external EXE directly. We hand off via the manifest:
-    // the bridge reads manifest.json from the exchange dir. Run AtlasAltiumBridge.exe
-    // manually, or via a Windows Startup shortcut / watcher (see AtlasAltium/README.md).
-    // TODO(one-click): restore auto-launch (folder-watcher bridge, or a launch primitive).
-    ShowInfo('Project staged for Atlas check-in.' + #13#10#13#10 +
-             'Manifest written to:' + #13#10 + manifestPath + #13#10#13#10 +
-             'Now run the Atlas bridge to upload:' + #13#10 + BridgeExePath);
-end;
-
-procedure ReportResult(const resultPath: String);
-var rs: TStringList;
-begin
-    if FileExists(resultPath) then
-    begin
-        rs := TStringList.Create;
-        try
-            rs.LoadFromFile(resultPath);
-            ShowInfo('Atlas check-in result:'#13#10 + rs.Text);
-        finally
-            rs.Free;
-        end;
+    dir := ExchangeDir;
+    ts := TStringList.Create;
+    try
+        ts.Add('check-in requested');
+        ts.SaveToFile(dir + '\request.trigger');
+    finally
+        ts.Free;
     end;
+
+    if FileExists(dir + '\watcher.alive') then
+        ShowInfo('Check-in sent to the Atlas watcher.' + #13#10#13#10 +
+                 'It uploads in the background (it first waits for the OutJob outputs to ' +
+                 'finish generating, so allow a minute or two). A result dialog will pop ' +
+                 'when it''s done.')
+    else
+        ShowWarning('Request written, but the Atlas watcher does not appear to be running.' +
+                    #13#10#13#10 +
+                    'Start it (the "Atlas Altium Watcher" Startup shortcut), or run the ' +
+                    'bridge once manually:' + #13#10 + BridgeExePath);
 end;
 
 // Collect the project's OWN OutJob documents (REQ 2). These are the real, enabled OutJobs
@@ -581,9 +583,8 @@ begin
         WriteManifest(manifestPath, 'checkin', partCode, projName, comment,
                       sourceLines, artifactLines, warnings, scanDirs);
 
-        // 7
-        LaunchBridge(manifestPath);
-        ReportResult(resultPath);
+        // 7 — hand off to the background watcher (it uploads; result dialog pops when done)
+        SignalWatcher(manifestPath);
     finally
         sourceLines.Free;
         artifactLines.Free;
