@@ -369,7 +369,7 @@ end;
 { ---------- 6: write the manifest ---------- }
 
 procedure WriteManifest(const path, operation, partCode, projName, comment: String;
-                        sourceLines, artifactLines, warnings: TStringList);
+                        sourceLines, artifactLines, warnings, scanDirs: TStringList);
 var js: TStringList; i: Integer; parts: TStringList;
 begin
     // NOTE: DelphiScript does NOT allow a nested procedure to see an enclosing
@@ -412,6 +412,14 @@ begin
                    ', "kind": ' + JsonStr(parts[1]) + ' }' +
                    IfThenStr(i < artifactLines.Count - 1, ',', ''));
         end;
+        js.Add('  ],');
+
+        // artifact_scan_dirs[] — folders the BRIDGE scans for generated outputs AFTER it
+        // waits for Altium's async OutJob generation to finish (the script can't harvest
+        // them in time because generation runs in the background).
+        js.Add('  "artifact_scan_dirs": [');
+        for i := 0 to scanDirs.Count - 1 do
+            js.Add('    ' + JsonStr(scanDirs[i]) + IfThenStr(i < scanDirs.Count - 1, ',', ''));
         js.Add('  ],');
 
         // warnings[]
@@ -492,7 +500,7 @@ var
     Workspace: IWorkspace;
     Project: IProject;
     partCode, projName, comment, dir, manifestPath, resultPath: String;
-    sourceLines, artifactLines, warnings, outJobPaths: TStringList;
+    sourceLines, artifactLines, warnings, outJobPaths, scanDirs: TStringList;
     i, k: Integer;
 begin
     Workspace := GetWorkspace;
@@ -530,6 +538,7 @@ begin
     sourceLines  := TStringList.Create;
     artifactLines := TStringList.Create;
     warnings     := TStringList.Create;
+    scanDirs     := TStringList.Create;
     try
         // 4
         CollectSourceFiles(Project, sourceLines);
@@ -539,10 +548,12 @@ begin
             else if Pos('|database', sourceLines[i]) > 0 then
                 warnings.Add('A database (.DbLib) library is bundled but needs the external DB to re-open.');
 
-        // 5 — run the project's OWN OutJobs and harvest their outputs (REQ 2).
-        //     Each enabled container is run; the OutJob's output folder is then scanned and
-        //     files classified by extension (BOM/PDF/Gerber/STEP). For STEP, add an
-        //     "Export STEP -> PCB Document" output to one of the OutJobs and enable it.
+        // 5 — FIRE the project's OWN OutJobs (REQ 2). Altium generates outputs
+        //     ASYNCHRONOUSLY, so we do NOT harvest here (the files aren't written yet —
+        //     that's why an in-script scan found nothing). Instead we record the folder to
+        //     scan; the bridge waits for generation to finish and harvests it (a separate
+        //     process can wait without blocking Altium). For STEP, add an "Export STEP ->
+        //     PCB Document" output to an OutJob and enable it.
         outJobPaths := TStringList.Create;
         try
             CollectProjectOutJobs(Project, outJobPaths);
@@ -553,12 +564,8 @@ begin
                 for k := 0 to outJobPaths.Count - 1 do
                     if not RunAllOutputs(outJobPaths[k]) then
                         warnings.Add('Could not run OutJob ''' + ExtractFileName(outJobPaths[k]) + ''' (REQ 2 partial).');
-                CleanupAfterOutputs;   // close the leftover CAMtastic/output doc
-                // Harvest the whole project tree — OutJob outputs scatter across container
-                // subfolders (e.g. "Project Outputs for STARK_4.2.2", "Generated (Gerber)").
-                HarvestArtifacts(ExtractFilePath(Project.DM_ProjectFullPath), artifactLines);
-                if artifactLines.Count = 0 then
-                    warnings.Add('OutJobs ran but produced no recognized artifacts — check the outputs are enabled (green) and write under the project folder.');
+                // The bridge harvests artifacts from here after generation completes.
+                scanDirs.Add(ExtractFilePath(Project.DM_ProjectFullPath));
             end;
         finally
             outJobPaths.Free;
@@ -572,7 +579,7 @@ begin
         if FileExists(resultPath) then DeleteFile(resultPath);
 
         WriteManifest(manifestPath, 'checkin', partCode, projName, comment,
-                      sourceLines, artifactLines, warnings);
+                      sourceLines, artifactLines, warnings, scanDirs);
 
         // 7
         LaunchBridge(manifestPath);
@@ -581,5 +588,6 @@ begin
         sourceLines.Free;
         artifactLines.Free;
         warnings.Free;
+        scanDirs.Free;
     end;
 end;

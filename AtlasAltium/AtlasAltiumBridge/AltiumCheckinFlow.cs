@@ -40,6 +40,12 @@ namespace AtlasCadPlugin.Altium
             m.source_files = m.source_files ?? new List<ManifestFile>();
             m.artifacts = m.artifacts ?? new List<ManifestArtifact>();
 
+            // REQ 2: Altium generates OutJob outputs ASYNCHRONOUSLY, so the in-Altium script
+            // can't harvest them in time. The script hands us the folders to scan; we (a
+            // separate process) wait for generation to finish and harvest the artifacts here.
+            if (m.artifacts.Count == 0 && m.artifact_scan_dirs != null && m.artifact_scan_dirs.Count > 0)
+                m.artifacts = HarvestArtifactsWaiting(m.artifact_scan_dirs);
+
             // --- locate the canonical native (.PrjPcb) ---
             var projectFile = m.source_files
                 .FirstOrDefault(f => string.Equals(f.role, "project", StringComparison.OrdinalIgnoreCase));
@@ -217,6 +223,75 @@ namespace AtlasCadPlugin.Altium
 
                 result.warnings.Add($"{partCode} was already checked out by you; proceeding with check-in.");
             }
+        }
+
+        // ---- REQ 2: artifact harvest (Altium generates outputs asynchronously) ----
+
+        /// <summary>
+        /// Wait for Altium's async OutJob generation to finish, then return the artifacts found
+        /// under the given dirs. We poll until the set of artifact files is stable (or a timeout);
+        /// if nothing appears within a short grace window we give up (e.g. no outputs enabled).
+        /// Runs in this separate process, so waiting never blocks Altium's generation.
+        /// </summary>
+        private static List<ManifestArtifact> HarvestArtifactsWaiting(List<string> dirs)
+        {
+            var start = DateTime.UtcNow;
+            var maxWait = TimeSpan.FromMinutes(4);          // generous for a big-board STEP
+            var firstFileGrace = TimeSpan.FromSeconds(90);  // give up if nothing ever appears
+            int prevCount = -1, stable = 0;
+            var found = ScanForArtifacts(dirs);
+
+            while (DateTime.UtcNow - start < maxWait)
+            {
+                found = ScanForArtifacts(dirs);
+                if (found.Count > 0)
+                {
+                    if (found.Count == prevCount) { stable++; if (stable >= 2) break; }
+                    else { stable = 0; prevCount = found.Count; }
+                }
+                else if (DateTime.UtcNow - start > firstFileGrace)
+                {
+                    break;   // nothing generated (outputs disabled / none) — stop waiting
+                }
+                System.Threading.Thread.Sleep(3000);
+            }
+
+            var list = new List<ManifestArtifact>();
+            foreach (var kv in found)
+                list.Add(new ManifestArtifact { path = kv.Key, kind = kv.Value });
+            return list;
+        }
+
+        /// <summary>Recursively scan dirs and classify files by extension (path -> kind).</summary>
+        private static Dictionary<string, string> ScanForArtifacts(IEnumerable<string> dirs)
+        {
+            var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var dir in dirs ?? Enumerable.Empty<string>())
+            {
+                if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) continue;
+                IEnumerable<string> files;
+                try { files = Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories); }
+                catch { continue; }
+                foreach (var f in files)
+                {
+                    var kind = ArtifactKind(f);
+                    if (kind != null && !result.ContainsKey(f)) result[f] = kind;
+                }
+            }
+            return result;
+        }
+
+        /// <summary>Classify a produced file by extension. Only "step" gets special handling
+        /// downstream (→ 3d slot); everything else rides along as a companion.</summary>
+        private static string ArtifactKind(string path)
+        {
+            string ext = (Path.GetExtension(path) ?? "").ToLowerInvariant();  // includes the dot
+            if (ext == ".csv" || ext == ".xls" || ext == ".xlsx") return "bom";
+            if (ext == ".pdf") return "pdf";
+            if (ext == ".step" || ext == ".stp") return "step";
+            if (ext == ".txt") return "gerber";                  // NC drill is often .txt
+            if (ext.Length >= 3 && ext[1] == 'g') return "gerber"; // .gtl/.gbl/.gts/...
+            return null;
         }
     }
 }

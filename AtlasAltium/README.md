@@ -105,12 +105,16 @@ bundled, warned), `database` (`.DbLib` — bundled but needs the external DB, wa
 
 ## Artifacts (REQ 2) — uses the project's own OutJobs
 
-On check-in the script runs **the OutJobs already in the project** (e.g. `EMS vendor files…`,
+On check-in the script **fires the OutJobs already in the project** (e.g. `EMS vendor files…`,
 `PCB fabrication files…` under *Settings → Output Job Files*) — no hand-authored OutJob needed.
-For each one it runs every **enabled** (green-lit) container, then scans that OutJob's output
-folder and classifies files by extension → `.csv/.xlsx`=BOM, `.pdf`=PDF schematics (→ Atlas `2d`),
-`.step/.stp`=STEP (→ Atlas `3d`), Gerber/drill=fabrication. Those become the manifest's
-`artifacts[]` and upload alongside the project.
+It runs every **enabled** (green-lit) container.
+
+**Altium generates outputs asynchronously**, so the script can't harvest them in time (it would
+scan before the files are written). Instead the script records the folder(s) to scan in the
+manifest (`artifact_scan_dirs`), and the **bridge** — a separate process that runs after
+generation — **waits for the output files to appear (polls until stable, ~timeout 4 min), then
+harvests** them, classifying by extension → `.step/.stp`=STEP (→ Atlas `3d`), `.pdf`, `.csv/.xlsx`,
+Gerber/drill. STEP rides into the `3d` slot; the rest attach as companions.
 
 - **STEP:** your existing OutJobs likely don't include it. Add an **Export Outputs → Export STEP
   → PCB Document** output to one of them and **enable** it (see `OutJob/HOW_TO_CREATE_OUTJOB.md`).

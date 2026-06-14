@@ -16,6 +16,9 @@ namespace AtlasCadPlugin.Altium
         public string comment;
         public List<ManifestFile> source_files = new List<ManifestFile>();
         public List<ManifestArtifact> artifacts = new List<ManifestArtifact>();
+        // Folders the bridge scans for generated outputs (Altium generates them async, so the
+        // script can't harvest them in time — the bridge waits for them here).
+        public List<string> artifact_scan_dirs = new List<string>();
         public List<string> warnings = new List<string>();
     }
 
