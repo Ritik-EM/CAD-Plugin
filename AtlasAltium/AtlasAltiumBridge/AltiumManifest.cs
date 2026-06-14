@@ -39,6 +39,7 @@ namespace AtlasCadPlugin.Altium
         public bool ok;
         public string operation;
         public string part_code;
+        public string new_root_part_number;   // the bumped root revision (for carry-forward)
         public string message;
         public List<string> bumped = new List<string>();
         public List<string> warnings = new List<string>();

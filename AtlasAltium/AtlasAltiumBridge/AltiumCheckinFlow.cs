@@ -174,7 +174,14 @@ namespace AtlasCadPlugin.Altium
                     inlineTree: true);
 
                 if (ci?.bumped != null)
+                {
                     result.bumped = ci.bumped.Select(b => $"{b.old_part_number} -> {b.new_part_number}").ToList();
+                    // The root's new revision — written to current_part_code.txt so the next
+                    // Altium check-in advances the project's AtlasPartCode (carry-forward).
+                    var rootBump = ci.bumped.FirstOrDefault(b =>
+                        string.Equals(b.old_part_number, m.part_code, StringComparison.OrdinalIgnoreCase));
+                    result.new_root_part_number = rootBump?.new_part_number;
+                }
                 result.ok = true;
                 result.message = $"Checked in {m.part_code} ({releaseType}); {result.bumped.Count} revision bump(s).";
                 return result;

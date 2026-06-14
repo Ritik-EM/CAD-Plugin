@@ -68,6 +68,13 @@ namespace AtlasCadPlugin.Altium
                                               .GetAwaiter().GetResult();
 
                 WriteResultObject(exchangeDir, result);
+                // Carry-forward: drop the new root revision where the Altium script picks it up
+                // on the next check-in to advance the project's AtlasPartCode.
+                if (result.ok && !string.IsNullOrEmpty(result.new_root_part_number))
+                {
+                    try { File.WriteAllText(Path.Combine(exchangeDir, "current_part_code.txt"), result.new_root_part_number); }
+                    catch { /* carry-forward is best-effort */ }
+                }
                 ShowSummary(result);
                 return result.ok ? 0 : 1;
             }

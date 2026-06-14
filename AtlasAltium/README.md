@@ -103,16 +103,31 @@ Written by `AtlasCheckin.pas`, read by `AtlasAltiumBridge.exe`. Exchange dir:
 `bucket` values: `file` (copyable, bundled), `managed` (Altium-365 server library — **not**
 bundled, warned), `database` (`.DbLib` — bundled but needs the external DB, warned).
 
-## The OutJob — important
+## Artifacts (REQ 2) — uses the project's own OutJobs
 
-The OutJob **must be created inside Altium** — a hand-authored file fails with *"Unrecognized
-OutputJob Document Version"*. Create one per project, named **`Atlas_Template.OutJob`** beside
-the `.PrjPcb`, with four enabled (green-lit) outputs — BOM, Schematic Prints (PDF), Gerber +
-NC Drill, and Export STEP. Full steps: **`OutJob/HOW_TO_CREATE_OUTJOB.md`**.
+On check-in the script runs **the OutJobs already in the project** (e.g. `EMS vendor files…`,
+`PCB fabrication files…` under *Settings → Output Job Files*) — no hand-authored OutJob needed.
+For each one it runs every **enabled** (green-lit) container, then scans that OutJob's output
+folder and classifies files by extension → `.csv/.xlsx`=BOM, `.pdf`=PDF schematics (→ Atlas `2d`),
+`.step/.stp`=STEP (→ Atlas `3d`), Gerber/drill=fabrication. Those become the manifest's
+`artifacts[]` and upload alongside the project.
 
-The script runs *every enabled container* in that OutJob, then harvests the output folder and
-classifies files by extension — so you don't have to keep container names in sync with code.
-Until the OutJob exists, check-in still works and just skips artifact generation (REQ 1 only).
+- **STEP:** your existing OutJobs likely don't include it. Add an **Export Outputs → Export STEP
+  → PCB Document** output to one of them and **enable** it (see `OutJob/HOW_TO_CREATE_OUTJOB.md`).
+  Requires the STEP/MBASTEP extension.
+- **Risk:** Gerber generation opens a CAMtastic preview that can throw a modal/stall, and
+  whole-board STEP on a large board can stall the writer (the same class as the CATIA
+  root-assembly STEP hang). The script closes the leftover doc afterward, but **test on your
+  real board** and watch for a hang.
+- If a project has no OutJob, check-in still works and just skips artifacts (REQ 1 only).
+
+## Revision carry-forward
+
+After a successful check-in the bridge writes the new root revision to
+`current_part_code.txt`; on the **next** check-in the script reads it and advances the project's
+`AtlasPartCode` parameter — so re-check-ins bump from the latest revision instead of the original
+base. (One cycle of lag is inherent: the param catches up at the start of the next run, because
+the in-Altium script runs before the out-of-process bridge knows the new revision.)
 
 ## Deploy
 

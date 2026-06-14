@@ -106,23 +106,24 @@ end;
 function ReadPartCode(Project: IProject): String;
 var i: Integer; p: IParameter;
 begin
+    // Return the LAST matching parameter (newest wins) so a carry-forward update is
+    // read correctly even if a stale duplicate ever lingers.
     Result := '';
     for i := 0 to Project.DM_ParameterCount - 1 do
     begin
         p := Project.DM_Parameters(i);
         if SameText(p.DM_Name, PART_CODE_PARAM) then
-        begin
             Result := p.DM_Value;
-            Exit;
-        end;
     end;
 end;
 
 procedure WritePartCode(Project: IProject; const code: String);
 begin
-    // Add/update a PROJECT-level parameter so the part code travels inside the .PrjPcb.
-    // SPIKE: confirm ObjectKind=Project (not Document) actually adds a project parameter
-    //        that round-trips after SaveObject; the process name historically implies a doc.
+    // A PROJECT-level parameter so the part code travels inside the .PrjPcb. Uses the same
+    // DocumentAddParameter call proven to work for the initial set. NOTE: on carry-forward
+    // this may append a second AtlasPartCode rather than update in place (we avoid assigning
+    // the read-only WSM DM_Value, which DelphiScript may reject). ReadPartCode reads the LAST
+    // (newest) match, so the latest revision always wins; any extra entries are cosmetic.
     ResetParameters;
     AddStringParameter('ObjectKind', 'Project');
     AddStringParameter('Name', PART_CODE_PARAM);
@@ -133,6 +134,31 @@ begin
     AddStringParameter('ObjectKind', 'Project');
     AddStringParameter('FileName', Project.DM_ProjectFullPath);
     RunProcess('WorkspaceManager:SaveObject');
+end;
+
+// Carry-forward: the bridge writes the new root revision to current_part_code.txt after a
+// successful check-in. Apply it to the project's AtlasPartCode so the NEXT check-in bumps
+// from the latest revision (not the original base). Applied once, then the file is cleared.
+procedure ApplyPendingRevision(Project: IProject);
+var f, newCode: String; rs: TStringList;
+begin
+    f := ExchangeDir + '\current_part_code.txt';
+    if not FileExists(f) then Exit;
+    newCode := '';
+    rs := TStringList.Create;
+    try
+        rs.LoadFromFile(f);
+        if rs.Count > 0 then newCode := Trim(rs[0]);
+    finally
+        rs.Free;
+    end;
+    if newCode <> '' then
+    begin
+        WritePartCode(Project, newCode);
+        ShowInfo('Atlas: project advanced to the latest revision ' + newCode +
+                 ' (carried forward from the previous check-in).');
+    end;
+    DeleteFile(f);
 end;
 
 function EnsurePartCode(Project: IProject): String;
@@ -434,6 +460,33 @@ begin
     end;
 end;
 
+// Collect the project's OWN OutJob documents (REQ 2). These are the real, enabled OutJobs
+// the project already ships (e.g. "EMS vendor files", "PCB fabrication files"), so we don't
+// need a hand-authored Atlas_Template.OutJob.
+procedure CollectProjectOutJobs(Project: IProject; paths: TStringList);
+var i: Integer; doc: IDocument;
+begin
+    for i := 0 to Project.DM_LogicalDocumentCount - 1 do
+    begin
+        doc := Project.DM_LogicalDocuments(i);
+        if SameText(ExtractFileExt(doc.DM_FullPath), '.OutJob') then
+            paths.Add(doc.DM_FullPath);
+    end;
+end;
+
+// After generating outputs, close the leftover focused doc (Gerber generation opens a
+// CAMtastic preview that can throw a modal save prompt and stall an unattended run).
+// Best-effort — never let cleanup break the check-in.
+procedure CleanupAfterOutputs;
+begin
+    try
+        ResetParameters;
+        AddStringParameter('ObjectKind', 'FocusedDocument');
+        RunProcess('WorkspaceManager:CloseObject');
+    except
+    end;
+end;
+
 { ============================================================================
   Entry point — bind this to a menu/toolbar button.
   ============================================================================ }
@@ -441,9 +494,9 @@ procedure AtlasCheckin;
 var
     Workspace: IWorkspace;
     Project: IProject;
-    partCode, projName, comment, dir, manifestPath, resultPath, outFolder, outJobPath: String;
-    sourceLines, artifactLines, warnings: TStringList;
-    i: Integer;
+    partCode, projName, comment, dir, manifestPath, resultPath, outFolder: String;
+    sourceLines, artifactLines, warnings, outJobPaths: TStringList;
+    i, k: Integer;
 begin
     Workspace := GetWorkspace;
     if Workspace = nil then begin ShowError('No Altium workspace.'); Exit; end;
@@ -463,6 +516,10 @@ begin
     end;
 
     projName := Project.DM_ProjectFileName;
+
+    // 0 — carry forward the revision from the previous check-in (if any) so the project's
+    //     AtlasPartCode tracks the latest revision before we read it below.
+    ApplyPendingRevision(Project);
 
     // 1 + 2
     CompileAndSaveAll(Project);
@@ -485,19 +542,31 @@ begin
             else if Pos('|database', sourceLines[i]) > 0 then
                 warnings.Add('A database (.DbLib) library is bundled but needs the external DB to re-open.');
 
-        // 5 — run outputs and harvest (REQ 2). Looks for a REAL OutJob named
-        //     Atlas_Template.OutJob beside the project (create it in Altium — a
-        //     hand-authored file fails with "Unrecognized OutputJob Document Version").
-        outJobPath := ExtractFilePath(Project.DM_ProjectFullPath) + 'Atlas_Template.OutJob';
-        if FileExists(outJobPath) then
-        begin
-            if RunAllOutputs(outJobPath, ExtractFilePath(Project.DM_ProjectFullPath), outFolder) then
-                HarvestArtifacts(outFolder, artifactLines)
+        // 5 — run the project's OWN OutJobs and harvest their outputs (REQ 2).
+        //     Each enabled container is run; the OutJob's output folder is then scanned and
+        //     files classified by extension (BOM/PDF/Gerber/STEP). For STEP, add an
+        //     "Export STEP -> PCB Document" output to one of the OutJobs and enable it.
+        outJobPaths := TStringList.Create;
+        try
+            CollectProjectOutJobs(Project, outJobPaths);
+            if outJobPaths.Count = 0 then
+                warnings.Add('No OutputJob in the project — no artifacts generated (REQ 2 skipped).')
             else
-                warnings.Add('Atlas_Template.OutJob beside the project is not a valid OutJob — REQ 2 skipped. Create a real one in Altium (File > New > Output Job File).');
-        end
-        else
-            warnings.Add('Atlas_Template.OutJob not found beside the project — no artifacts generated (REQ 2 skipped).');
+            begin
+                for k := 0 to outJobPaths.Count - 1 do
+                begin
+                    if RunAllOutputs(outJobPaths[k], ExtractFilePath(Project.DM_ProjectFullPath), outFolder) then
+                        HarvestArtifacts(outFolder, artifactLines)
+                    else
+                        warnings.Add('Could not run OutJob ''' + ExtractFileName(outJobPaths[k]) + ''' (REQ 2 partial).');
+                end;
+                CleanupAfterOutputs;   // close the leftover CAMtastic/output doc
+                if artifactLines.Count = 0 then
+                    warnings.Add('OutJobs ran but produced no recognized artifacts — check their output folders and that the outputs are enabled (green).');
+            end;
+        finally
+            outJobPaths.Free;
+        end;
 
         // 6
         dir := ExchangeDir;
