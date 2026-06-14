@@ -15,7 +15,7 @@
        to C:\Users\Public\AtlasAltium  (world-writable; also the manifest/result exchange dir).
     2. Copies the DelphiScript (AtlasCheckin.pas + AtlasAltium.PrjScr) to
        %LOCALAPPDATA%\Atlas\Altium  (where the Altium Global Project points).
-    3. Creates a Startup shortcut "Atlas Altium Watcher" -> AtlasAltiumBridge.exe --watch,
+    3. Creates a Startup shortcut "Atlas Altium Watcher" that runs the bridge in watch mode,
        and offers to start the watcher now (ExitDialog checkbox).
 
   The ONE manual step the MSI can't do (Altium has no script-install hook): the user adds
@@ -46,7 +46,7 @@
         AllowSameVersionUpgrades="yes"
         DowngradeErrorMessage="A newer version of Atlas CAD Plugin for Altium is already installed." />
 
-    <!-- The watcher (AtlasAltiumBridge.exe --watch) holds the EXE/DLLs open, so close it
+    <!-- The watcher (the bridge run in watch mode) holds the EXE/DLLs open, so close it
          before an install/upgrade or the files would be locked. -->
     <util:CloseApplication Id="CloseWatcher"
                            Target="AtlasAltiumBridge.exe"
