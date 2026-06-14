@@ -131,7 +131,7 @@ namespace AtlasCadPlugin.Altium
                     companion_filenames = companionFilenames,
                     detected_description = m.project_name,
                 };
-                var up = await api.UploadPartMasterAsync(new object[] { node }, filePaths);
+                var up = await api.UploadPartMasterAsync(new object[] { node }, filePaths, inlineTree: true);
                 int attached = up?.attached?.Count ?? 0;
                 int missing = up?.missing_parts?.Count ?? 0;
                 int already = up?.already_present?.Count ?? 0;
@@ -159,6 +159,10 @@ namespace AtlasCadPlugin.Altium
                     sha256 = sha,
                 };
                 var changed = new List<string> { m.part_code };
+                // Altium's tree is a single node (~hundreds of bytes), far under the 8 KB WAF
+                // limit, so send it INLINE. This makes check-in work against a backend that
+                // doesn't yet read the S3 staging manifest (atlas-api's _load_tree_from_staging
+                // is still undeployed). Once atlas-api ships that, inlineTree can drop to false.
                 var ci = await api.CheckinAsync(
                     rootPartNumber: m.part_code,
                     tree: new object[] { node },
@@ -166,7 +170,8 @@ namespace AtlasCadPlugin.Altium
                     changed: changed,
                     comment: m.comment,
                     otp: null,
-                    filePaths: filePaths);
+                    filePaths: filePaths,
+                    inlineTree: true);
 
                 if (ci?.bumped != null)
                     result.bumped = ci.bumped.Select(b => $"{b.old_part_number} -> {b.new_part_number}").ToList();

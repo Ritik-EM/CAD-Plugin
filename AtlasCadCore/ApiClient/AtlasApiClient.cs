@@ -143,20 +143,23 @@ namespace AtlasCadCore.ApiClient
 
         public async Task<UploadResultDto> UploadPartMasterAsync(
             IEnumerable<object> tree, IEnumerable<string> filePaths,
-            bool releaseNewRevision = false, string otp = null)
+            bool releaseNewRevision = false, string otp = null, bool inlineTree = false)
         {
             var pathList = filePaths?.Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
                                     .ToList() ?? new List<string>();
+            var treeList = (tree ?? Enumerable.Empty<object>()).ToList();
             // Stage the BOM tree to S3 alongside the part files so the finalize body
             // below stays tiny (just the session id). The full tree would otherwise
             // trip the 8 KB AWS WAF body-size rule for a big assembly.
-            string treeJson = JsonConvert.SerializeObject(tree ?? Enumerable.Empty<object>());
+            string treeJson = JsonConvert.SerializeObject(treeList);
             string sessionId = await StageFilesAsync(pathList, "Upload to part-master", treeJson);
 
             var payload = new
             {
                 session_id = sessionId,
-                tree = Enumerable.Empty<object>(),   // tree travels via the S3 manifest now
+                // See CheckinAsync: inlineTree=true sends the tree in-body for a tiny-tree
+                // caller talking to a backend that doesn't yet read the staged manifest.
+                tree = inlineTree ? (IEnumerable<object>)treeList : Enumerable.Empty<object>(),
                 release_new_revision = releaseNewRevision,
                 otp = otp ?? "",
             };
@@ -182,20 +185,26 @@ namespace AtlasCadCore.ApiClient
 
         public async Task<CheckinResultDto> CheckinAsync(
             string rootPartNumber, IEnumerable<object> tree, string releaseType,
-            List<string> changed, string comment, string otp, IEnumerable<string> filePaths)
+            List<string> changed, string comment, string otp, IEnumerable<string> filePaths,
+            bool inlineTree = false)
         {
             var pathList = filePaths?.Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
                                     .ToList() ?? new List<string>();
+            var treeList = (tree ?? Enumerable.Empty<object>()).ToList();
             // Stage the BOM tree to S3 alongside the part files so the finalize body
             // below stays tiny (just the session id) — the full tree would otherwise
             // trip the 8 KB AWS WAF body-size rule for a big assembly.
-            string treeJson = JsonConvert.SerializeObject(tree ?? Enumerable.Empty<object>());
+            string treeJson = JsonConvert.SerializeObject(treeList);
             string sessionId = await StageFilesAsync(pathList, "Checkin", treeJson);
 
             var payload = new
             {
                 session_id = sessionId,
-                tree = Enumerable.Empty<object>(),   // tree travels via the S3 manifest now
+                // Normally empty — the tree rides via the S3 staging manifest (WAF bypass).
+                // inlineTree=true sends it in-body instead, for callers with a tiny tree
+                // (e.g. the single-part Altium check-in) talking to a backend that doesn't
+                // yet read the staged manifest. Safe only when the tree is well under 8 KB.
+                tree = inlineTree ? (IEnumerable<object>)treeList : Enumerable.Empty<object>(),
                 release_type = releaseType,
                 changed = changed ?? new List<string>(),
                 comment = comment ?? "",
