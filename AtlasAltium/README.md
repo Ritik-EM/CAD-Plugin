@@ -121,10 +121,14 @@ On the Windows build box (VS 2022 Developer Command Prompt):
 installer\BuildAltium.cmd
 ```
 
-This builds `AtlasAltiumBridge` in Release, copies it (+ `AtlasCadCore.dll`,
-`Newtonsoft.Json.dll`) to `%LOCALAPPDATA%\Atlas\Altium`, and copies the script + OutJob to a
-known location. Then, in Altium: **Preferences → Scripting System → Global Projects → Add**
-`AtlasAltium.PrjScr`, and bind `AtlasCheckin` to a menu/toolbar button (DXP → Customize).
+This builds `AtlasAltiumBridge` in Release and installs to two fixed locations:
+- **bridge EXE + DLLs + exchange files** → `C:\Users\Public\AtlasAltium` (fixed path, because
+  DelphiScript can't read env vars to locate it).
+- **script + OutJob** → `%LOCALAPPDATA%\Atlas\Altium` (where the Global Project points).
+
+Then, in Altium: **Preferences → Scripting System → Global Projects → Add**
+`%LOCALAPPDATA%\Atlas\Altium\AtlasAltium.PrjScr`. To run it, use **File → Run Script** (pick
+`AtlasCheckin`), or bind it to a button via right-click toolbar → Customize.
 
 ## Spikes to run before trusting this (on your real Altium)
 

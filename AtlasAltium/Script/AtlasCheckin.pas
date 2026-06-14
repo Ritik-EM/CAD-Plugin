@@ -23,24 +23,23 @@
   ============================================================================ }
 
 const
-    EXCHANGE_DIR_DEFAULT = 'C:\Users\Public\AtlasAltium';
-    PART_CODE_PARAM      = 'AtlasPartCode';
-    // The bridge is installed here by installer\BuildAltium.cmd.
-    BRIDGE_EXE_REL       = '\Atlas\Altium\AtlasAltiumBridge.exe';   // under %LOCALAPPDATA%
+    // Fixed, user-independent location for the bridge EXE + exchange files
+    // (manifest.json / result.json / *.tree.json). DelphiScript does NOT expose
+    // GetEnvironmentVariable, so we hardcode rather than read %LOCALAPPDATA%/%PUBLIC%.
+    // installer\BuildAltium.cmd installs AtlasAltiumBridge.exe into this same folder.
+    EXCHANGE_DIR    = 'C:\Users\Public\AtlasAltium';
+    PART_CODE_PARAM = 'AtlasPartCode';
 
 { ---------- small helpers ---------- }
 
 function ExchangeDir: String;
-var env: String;
 begin
-    env := GetEnvironmentVariable('ATLAS_ALTIUM_DIR');   { SPIKE: confirm GetEnvironmentVariable is exposed; else hardcode }
-    if env <> '' then Result := env
-    else Result := EXCHANGE_DIR_DEFAULT;
+    Result := EXCHANGE_DIR;
 end;
 
 function BridgeExePath: String;
 begin
-    Result := GetEnvironmentVariable('LOCALAPPDATA') + BRIDGE_EXE_REL;
+    Result := EXCHANGE_DIR + '\AtlasAltiumBridge.exe';
 end;
 
 // JSON string escaping (backslash, quote, control chars). Altium paths are full of '\'.
