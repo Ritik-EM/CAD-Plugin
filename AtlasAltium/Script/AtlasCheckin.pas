@@ -450,6 +450,18 @@ begin
     Project := Workspace.DM_FocusedProject;
     if Project = nil then begin ShowError('Open a PCB project first.'); Exit; end;
 
+    // Guard: the FOCUSED project must be a PCB project (.PrjPcb). When a script tab is the
+    // active document, DM_FocusedProject can resolve to the script project (.PrjScr) instead,
+    // which has no .PrjPcb -> a near-empty manifest -> the bridge fails with "no project file".
+    if not SameText(ExtractFileExt(Project.DM_ProjectFullPath), '.PrjPcb') then
+    begin
+        ShowError('The focused project is "' + Project.DM_ProjectFileName + '", not a PCB project.' +
+                  #13#10#13#10 +
+                  'Click your PCB project (the .PrjPcb, e.g. STARK_4.2.2) or one of its open ' +
+                  'documents in the Projects panel to focus it, then run AtlasCheckin again.');
+        Exit;
+    end;
+
     projName := Project.DM_ProjectFileName;
 
     // 1 + 2
