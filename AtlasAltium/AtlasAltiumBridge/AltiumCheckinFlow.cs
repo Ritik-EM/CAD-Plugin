@@ -1,0 +1,174 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using AtlasCadCore.ApiClient;
+using AtlasCadCore.Utility;
+using Newtonsoft.Json;
+
+namespace AtlasCadPlugin.Altium
+{
+    /// <summary>
+    /// The Altium analog of AtlasCadCore CheckinFlow, but for the ECAD single-part model:
+    /// the whole project is ONE Atlas part_master (the part code). The .PrjPcb is the
+    /// canonical native, the whole-board STEP fills the step slot, and every other file
+    /// (schematics, PCB, libraries, BOM, PDF, Gerbers) is a companion under the same part.
+    ///
+    /// It deliberately calls api.CheckinAsync / api.UploadPartMasterAsync DIRECTLY rather
+    /// than reusing CheckinFlow.RunAsync(api, adapter): those flows are MCAD-shaped (per-part
+    /// STEP export, recursive assembly walk, 10-char-part-number tree validation on every
+    /// node, checkout-tracking gate) and would fight Altium's flat one-part model. What we
+    /// reuse is the genuinely valuable, proven machinery: AtlasApiClient's WAF-safe S3
+    /// staging, the tree/companion contract, FileHashing, PartNumberParser.
+    /// </summary>
+    public static class AltiumCheckinFlow
+    {
+        public static async Task<AltiumResult> RunAsync(AtlasApiClient api, AltiumManifest m, string exchangeDir)
+        {
+            var result = new AltiumResult
+            {
+                operation = m.operation,
+                part_code = m.part_code,
+                warnings = m.warnings ?? new List<string>(),
+            };
+
+            if (string.IsNullOrWhiteSpace(m.part_code))
+                throw new Exception("Manifest has no part_code; bind one to the project first.");
+
+            // Normalize: deserialization can leave these null if the JSON had explicit nulls.
+            m.source_files = m.source_files ?? new List<ManifestFile>();
+            m.artifacts = m.artifacts ?? new List<ManifestArtifact>();
+
+            // --- locate the canonical native (.PrjPcb) ---
+            var projectFile = m.source_files
+                .FirstOrDefault(f => string.Equals(f.role, "project", StringComparison.OrdinalIgnoreCase));
+            if (projectFile == null || string.IsNullOrEmpty(projectFile.path) || !File.Exists(projectFile.path))
+                throw new Exception("Manifest has no existing project (.PrjPcb) file to upload.");
+
+            string nativePath = projectFile.path;
+            string nativeFilename = Path.GetFileName(nativePath);
+
+            // --- whole-board STEP -> step slot ---
+            var stepArtifact = m.artifacts
+                .FirstOrDefault(a => string.Equals(a.kind, "step", StringComparison.OrdinalIgnoreCase)
+                                     && !string.IsNullOrEmpty(a.path) && File.Exists(a.path));
+            string stepPath = stepArtifact?.path;
+            string stepFilename = stepPath != null ? Path.GetFileName(stepPath) : null;
+
+            // --- companions: every other bundled source file + every other artifact ---
+            var companionPaths = new List<string>();
+            var companionFilenames = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { nativeFilename };
+            if (stepFilename != null) seen.Add(stepFilename);
+
+            void AddCompanion(string path)
+            {
+                if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+                string name = Path.GetFileName(path);
+                if (!seen.Add(name)) return;   // dedupe by filename (Atlas stores by name under the part prefix)
+                companionPaths.Add(path);
+                companionFilenames.Add(name);
+            }
+
+            foreach (var f in m.source_files)
+            {
+                if (ReferenceEquals(f, projectFile)) continue;
+                // Only file-based libs/docs are bundled. managed/database were already warned upstream.
+                if (!string.Equals(f.bucket, "file", StringComparison.OrdinalIgnoreCase)) continue;
+                AddCompanion(f.path);
+            }
+            foreach (var a in m.artifacts)
+            {
+                if (ReferenceEquals(a, stepArtifact)) continue;
+                AddCompanion(a.path);
+            }
+
+            // --- per-part tree manifest (lists every filename under this part) ---
+            var allFilenames = new List<string> { nativeFilename };
+            if (stepFilename != null) allFilenames.Add(stepFilename);
+            allFilenames.AddRange(companionFilenames);
+
+            string treeFilename = m.part_code + ".tree.json";
+            string treePath = Path.Combine(exchangeDir, treeFilename);
+            var treeManifest = new
+            {
+                version = 1,
+                root_part_number = m.part_code,
+                root_filename = nativeFilename,
+                nodes = new[]
+                {
+                    new
+                    {
+                        part_number = m.part_code,
+                        filename = nativeFilename,
+                        filenames = allFilenames,
+                        parent_part_number = (string)null,
+                    }
+                }
+            };
+            File.WriteAllText(treePath, JsonConvert.SerializeObject(treeManifest, Formatting.Indented));
+
+            string sha = FileHashing.Sha256Hex(nativePath);
+
+            // --- file set to stage (native + step + companions + the tree manifest) ---
+            var filePaths = new List<string> { nativePath };
+            if (stepPath != null) filePaths.Add(stepPath);
+            filePaths.AddRange(companionPaths);
+            filePaths.Add(treePath);
+
+            string releaseType = PartNumberParser.ReleaseTypeFromPartNumber(m.part_code) ?? "PROTO";
+
+            if (string.Equals(m.operation, "upload", StringComparison.OrdinalIgnoreCase))
+            {
+                // First-time sync: create the part_master entry (no revision bump).
+                var node = new
+                {
+                    part_number = m.part_code,
+                    filename = nativeFilename,
+                    step_filename = stepFilename,
+                    tree_filename = treeFilename,
+                    companion_filenames = companionFilenames,
+                    detected_description = m.project_name,
+                };
+                var up = await api.UploadPartMasterAsync(new object[] { node }, filePaths);
+                int attached = up?.attached?.Count ?? 0;
+                int missing = up?.missing_parts?.Count ?? 0;
+                int already = up?.already_present?.Count ?? 0;
+                result.ok = attached > 0 || (up?.new_revisions?.Count ?? 0) > 0;
+                result.message = $"Upload: {attached} attached, {missing} missing, {already} already present. " +
+                                 (already > 0 ? "Use Check In to revise an existing part." : "");
+                return result;
+            }
+            else
+            {
+                // Check-in: new revision of an existing part.
+                var node = new
+                {
+                    part_number = m.part_code,
+                    parent_part_number = (string)null,
+                    filename = nativeFilename,
+                    step_filename = stepFilename,
+                    tree_filename = treeFilename,
+                    companion_filenames = companionFilenames,
+                    sha256 = sha,
+                };
+                var changed = new List<string> { m.part_code };
+                var ci = await api.CheckinAsync(
+                    rootPartNumber: m.part_code,
+                    tree: new object[] { node },
+                    releaseType: releaseType,
+                    changed: changed,
+                    comment: m.comment,
+                    otp: null,
+                    filePaths: filePaths);
+
+                if (ci?.bumped != null)
+                    result.bumped = ci.bumped.Select(b => $"{b.old_part_number} -> {b.new_part_number}").ToList();
+                result.ok = true;
+                result.message = $"Checked in {m.part_code} ({releaseType}); {result.bumped.Count} revision bump(s).";
+                return result;
+            }
+        }
+    }
+}

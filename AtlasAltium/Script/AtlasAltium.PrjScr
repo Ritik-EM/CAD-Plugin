@@ -1,0 +1,16 @@
+[Design]
+Version=1.0
+HierarchyMode=0
+
+[Documents]
+Count=1
+
+[Document1]
+DocumentPath=AtlasCheckin.pas
+
+; Script project for the Atlas Altium check-in script.
+; Install via: Altium > Preferences > Scripting System > Global Projects > Add this .PrjScr,
+; then DXP > Customize to bind the AtlasCheckin procedure to a menu/toolbar button.
+;
+; NOTE: Altium normally generates the .PrjScr; this hand-authored minimal form usually loads,
+; but if Altium rejects it, create a new Script Project in Altium and add AtlasCheckin.pas to it.
