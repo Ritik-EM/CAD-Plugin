@@ -302,8 +302,15 @@ begin
     else if ext = '.pdf' then Result := 'pdf'
     else if (ext = '.step') or (ext = '.stp') then Result := 'step'
     else if (ext = '.txt') then Result := 'gerber'   // NC drill is often .txt
-    else if (Length(ext) >= 3) and (ext[2] = 'g') then Result := 'gerber'  // .gtl/.gbl/.gts/...
-    else Result := '';
+    else
+    begin
+        // Gerber extensions are .g** (e.g. .gtl/.gbl/.gts). Check length FIRST so we
+        // never index ext[2] out of range — DelphiScript 'and' is not guaranteed to
+        // short-circuit, so don't rely on (Length>=3) guarding ext[2] in one expression.
+        Result := '';
+        if Length(ext) >= 3 then
+            if ext[2] = 'g' then Result := 'gerber';
+    end;
 end;
 
 // Recursively scan the output folder for produced artifacts -> "path|kind" lines.
@@ -332,56 +339,56 @@ end;
 
 procedure WriteManifest(const path, operation, partCode, projName, comment: String;
                         sourceLines, artifactLines, warnings: TStringList);
-var js: TStringList; i: Integer; parts: TStringList; first: Boolean;
-
-    procedure AddRaw(const s: String); begin js.Add(s); end;
-
+var js: TStringList; i: Integer; parts: TStringList;
 begin
+    // NOTE: DelphiScript does NOT allow a nested procedure to see an enclosing
+    // procedure's local variable ("Can't access top level variable"), so we call
+    // js.Add(...) directly instead of a nested AddRaw helper.
     js := TStringList.Create;
     parts := TStringList.Create;
     try
-        AddRaw('{');
-        AddRaw('  "schema_version": 1,');
-        AddRaw('  "operation": ' + JsonStr(operation) + ',');
-        AddRaw('  "part_code": ' + JsonStr(partCode) + ',');
-        AddRaw('  "project_name": ' + JsonStr(projName) + ',');
-        AddRaw('  "comment": ' + JsonStr(comment) + ',');
+        js.Add('{');
+        js.Add('  "schema_version": 1,');
+        js.Add('  "operation": ' + JsonStr(operation) + ',');
+        js.Add('  "part_code": ' + JsonStr(partCode) + ',');
+        js.Add('  "project_name": ' + JsonStr(projName) + ',');
+        js.Add('  "comment": ' + JsonStr(comment) + ',');
 
         // source_files[]
-        AddRaw('  "source_files": [');
+        js.Add('  "source_files": [');
         for i := 0 to sourceLines.Count - 1 do
         begin
             parts.Clear;
             parts.Delimiter := '|'; parts.StrictDelimiter := True;
             parts.DelimitedText := sourceLines[i];
             while parts.Count < 3 do parts.Add('');
-            AddRaw('    { "path": ' + JsonStr(parts[0]) +
+            js.Add('    { "path": ' + JsonStr(parts[0]) +
                    ', "role": ' + JsonStr(parts[1]) +
                    ', "bucket": ' + JsonStr(parts[2]) + ' }' +
                    IfThenStr(i < sourceLines.Count - 1, ',', ''));
         end;
-        AddRaw('  ],');
+        js.Add('  ],');
 
         // artifacts[]
-        AddRaw('  "artifacts": [');
+        js.Add('  "artifacts": [');
         for i := 0 to artifactLines.Count - 1 do
         begin
             parts.Clear;
             parts.Delimiter := '|'; parts.StrictDelimiter := True;
             parts.DelimitedText := artifactLines[i];
             while parts.Count < 2 do parts.Add('');
-            AddRaw('    { "path": ' + JsonStr(parts[0]) +
+            js.Add('    { "path": ' + JsonStr(parts[0]) +
                    ', "kind": ' + JsonStr(parts[1]) + ' }' +
                    IfThenStr(i < artifactLines.Count - 1, ',', ''));
         end;
-        AddRaw('  ],');
+        js.Add('  ],');
 
         // warnings[]
-        AddRaw('  "warnings": [');
+        js.Add('  "warnings": [');
         for i := 0 to warnings.Count - 1 do
-            AddRaw('    ' + JsonStr(warnings[i]) + IfThenStr(i < warnings.Count - 1, ',', ''));
-        AddRaw('  ]');
-        AddRaw('}');
+            js.Add('    ' + JsonStr(warnings[i]) + IfThenStr(i < warnings.Count - 1, ',', ''));
+        js.Add('  ]');
+        js.Add('}');
 
         js.SaveToFile(path);   { SPIKE: confirm SaveToFile writes UTF-8; if it writes Latin-1, force UTF-8 }
     finally
@@ -393,7 +400,7 @@ end;
 { ---------- 7: launch the bridge ---------- }
 
 procedure LaunchBridge(const manifestPath: String);
-var sh: OleVariant; cmd: String; rc: Integer;
+var sh: Variant; cmd: String; rc: Integer;
 begin
     cmd := '"' + BridgeExePath + '" --manifest "' + manifestPath + '"';
     // SPIKE: confirm CreateOleObject is available in DelphiScript on the target version.
