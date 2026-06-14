@@ -88,17 +88,20 @@
 
     <!-- ── Per-machine: the bridge (shared, in C:\Users\Public\AtlasAltium) ── -->
     <ComponentGroup Id="BridgeComponents" Directory="INSTALLFOLDER">
-      <Component Id="BridgeExe" Guid="*" Win64="yes">
+      <!-- Explicit (stable) GUIDs: the install dir (%PUBLIC%\AtlasAltium) is resolved at
+           runtime, not a standard MSI folder, so WiX can't auto-generate component GUIDs
+           here. Keep these GUIDs STABLE across versions so upgrades replace the files. -->
+      <Component Id="BridgeExe" Guid="D4E5F6A7-B8C9-40D0-A1F2-3B4C5D6E7F80" Win64="yes">
         <File Id="AtlasAltiumBridgeExe"
               Source="..\AtlasAltium\AtlasAltiumBridge\bin\Release\AtlasAltiumBridge.exe"
               KeyPath="yes" />
       </Component>
-      <Component Id="CoreDll" Guid="*" Win64="yes">
+      <Component Id="CoreDll" Guid="E5F6A7B8-C9D0-41E1-B2A3-4C5D6E7F8091" Win64="yes">
         <File Id="AtlasCadCoreDll"
               Source="..\AtlasAltium\AtlasAltiumBridge\bin\Release\AtlasCadCore.dll"
               KeyPath="yes" />
       </Component>
-      <Component Id="NewtonsoftJsonDll" Guid="*" Win64="yes">
+      <Component Id="NewtonsoftJsonDll" Guid="F6A7B8C9-D0E1-42F2-A3B4-5D6E7F8091A2" Win64="yes">
         <File Id="NewtonsoftJson"
               Source="..\AtlasAltium\AtlasAltiumBridge\bin\Release\Newtonsoft.Json.dll"
               KeyPath="yes" />
