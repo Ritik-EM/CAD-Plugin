@@ -408,16 +408,15 @@ end;
 { ---------- 7: launch the bridge ---------- }
 
 procedure LaunchBridge(const manifestPath: String);
-var sh: Variant; cmd: String; rc: Integer;
 begin
-    cmd := '"' + BridgeExePath + '" --manifest "' + manifestPath + '"';
-    // SPIKE: confirm CreateOleObject is available in DelphiScript on the target version.
-    // WScript.Shell.Run(cmd, windowStyle, waitOnReturn) is the standard Windows idiom.
-    sh := CreateOleObject('WScript.Shell');
-    rc := sh.Run(cmd, 1, True);   // 1 = normal window, True = wait for the bridge to finish
-    if rc <> 0 then
-        ShowWarning('Atlas bridge exited with code ' + IntToStr(rc) +
-                    '. See result.json / errors.log in the exchange dir.');
+    // DelphiScript on this Altium build does NOT expose CreateOleObject (or ShellExecute),
+    // so the script can't launch an external EXE directly. We hand off via the manifest:
+    // the bridge reads manifest.json from the exchange dir. Run AtlasAltiumBridge.exe
+    // manually, or via a Windows Startup shortcut / watcher (see AtlasAltium/README.md).
+    // TODO(one-click): restore auto-launch (folder-watcher bridge, or a launch primitive).
+    ShowInfo('Project staged for Atlas check-in.' + #13#10#13#10 +
+             'Manifest written to:' + #13#10 + manifestPath + #13#10#13#10 +
+             'Now run the Atlas bridge to upload:' + #13#10 + BridgeExePath);
 end;
 
 procedure ReportResult(const resultPath: String);

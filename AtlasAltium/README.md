@@ -22,13 +22,18 @@ in two, bridged by a JSON manifest on disk:
   │  • resolve libraries       │   result.json     │  • builds tree + filePaths     │
   │  • run OutJob → artifacts  │                   │  • api.CheckinAsync / Upload   │
   │  • write manifest.json     │                   │      → S3 (WAF-safe staging)   │
-  │  • launch the bridge .exe  │                   └──────────────────────────────┘
-  └───────────────────────────┘
+  └───────────────────────────┘                   └──────────────────────────────┘
 ```
 
 The C# side reuses the **exact same** proven upload pipeline as the other three CADs
 (`AtlasApiClient`, S3 presign/PUT staging, `AuthService`/`TokenStore`, `FileHashing`,
 the DTOs). Secrets and HTTPS never touch the DelphiScript.
+
+> **Launching the bridge:** this Altium build's DelphiScript does not expose
+> `CreateOleObject`/`ShellExecute`, so the script can't start the bridge `.exe` directly. The
+> script writes `manifest.json` and the bridge is run separately (manually, or via a Windows
+> Startup shortcut / folder-watcher). One-click auto-launch is a TODO — see `AtlasCheckin.pas`
+> `LaunchBridge`.
 
 ## ECAD model: one project = one part code
 
