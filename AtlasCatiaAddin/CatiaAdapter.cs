@@ -15,17 +15,24 @@ namespace AtlasCadPlugin.Catia
 {
     public class CatiaAdapter : ICadAdapter, IRevisionDisplayAdapter
     {
-        public const string WalkAssemblyVersion = "2026-06-13-skip-root-assembly-step-v4";
+        public const string WalkAssemblyVersion = "2026-06-15-root-step-size-gated-v5";
 
-        // ONLY the ROOT assembly's STEP export is disabled — sub-assembly STEPs are
-        // KEPT (the user needs those). Exporting the top assembly to a single STEP
-        // tessellates its ENTIRE 100+-part subtree in one Document.ExportData call,
-        // which consistently hangs CATIA's own STEP writer at "99% — writing file"
-        // (proven by the walk log: the freeze is always on file 1/122, the root).
-        // Each sub-assembly tessellates only its own small subtree and exports fine.
-        // Flip to true to re-enable the root STEP once the assembly load-mode
-        // (cache/visualization vs design) issue is solved.
-        private const bool ExportRootAssemblyStep = false;
+        // The ROOT assembly's STEP export is the proven hang point — but ONLY on
+        // big trees. Exporting the top assembly to a single STEP tessellates its
+        // ENTIRE subtree in one Document.ExportData call; on a 100+-part assembly
+        // that consistently hangs CATIA's own STEP writer at "99% — writing file"
+        // (the walk log freeze was always on file 1/122, the root). On a SMALL
+        // assembly that same export finishes in seconds and its single combined
+        // top-level STEP is worth keeping. So the skip is SIZE-GATED, not absolute:
+        // skip the root STEP only when the tree has at least this many geometry
+        // files (CATPart/CATProduct). Sub-assembly STEPs are ALWAYS kept.
+        //
+        // Tuning: lower = safer against hangs (skip the root sooner); higher = keep
+        // the root STEP for larger assemblies (risking the writer stall). The
+        // observed hang was at ~122 parts; 50 leaves a wide safety margin while
+        // still producing a root STEP for genuinely small assemblies. Set to
+        // int.MaxValue to always export the root STEP, or 0 to never.
+        private const int RootAssemblyStepMaxParts = 100;
 
         private readonly Application _catApp;
 
@@ -580,7 +587,19 @@ namespace AtlasCadPlugin.Catia
             // is a large chunk of CATIA-side memory — and we're about to pile a
             // full-tree STEP tessellation on top of it. Reclaim it ONCE up front
             // so the heavy exports start from the smallest possible footprint.
-            LogWalk($"ExportStep: {inputs.Count} candidate(s) — reclaiming walk RCWs first");
+            // Count the real geometry files (CATPart/CATProduct) once up front.
+            // This is our proxy for "how heavy is the root assembly's whole-tree
+            // STEP export" — the root tessellates this entire set in one call.
+            int geometryCount = 0;
+            foreach (var gf in inputs)
+            {
+                if (string.IsNullOrEmpty(gf.Filename)) continue;
+                string gext = Path.GetExtension(gf.Filename).ToLowerInvariant();
+                if (gext == ".catpart" || gext == ".catproduct") geometryCount++;
+            }
+
+            LogWalk($"ExportStep: {inputs.Count} candidate(s), {geometryCount} geometry file(s) " +
+                    $"(root STEP skip threshold = {RootAssemblyStepMaxParts}) — reclaiming walk RCWs first");
             ReclaimMemory();
 
             for (int i = 0; i < inputs.Count; i++)
@@ -594,14 +613,22 @@ namespace AtlasCadPlugin.Catia
                 if (ext != ".catpart" && ext != ".catproduct") continue;
                 bool isAssembly = ext == ".catproduct";
 
-                // Skip ONLY the ROOT assembly's STEP — exporting the whole top
-                // assembly in one ExportData call is the proven hang point (CATIA's
-                // writer stalls at "99% writing file"). Sub-assembly STEPs are kept.
-                if (isAssembly && f.IsRoot && !ExportRootAssemblyStep)
+                // Skip the ROOT assembly's STEP ONLY when the tree is big enough to
+                // risk the writer hang — exporting the whole top assembly in one
+                // ExportData call stalls CATIA at "99% writing file" on 100+-part
+                // trees, but finishes fine on small ones. Sub-assembly STEPs are
+                // always kept. Small assemblies fall through and export the root.
+                if (isAssembly && f.IsRoot && geometryCount >= RootAssemblyStepMaxParts)
                 {
                     LogWalk($"  ExportStep[{i + 1}/{inputs.Count}] SKIP ROOT assembly STEP " +
-                            $"(whole-tree export hangs CATIA; sub-assembly STEPs kept) '{f.Filename}'");
+                            $"(tree has {geometryCount} geometry files >= {RootAssemblyStepMaxParts}; " +
+                            $"whole-tree export hangs CATIA; sub-assembly STEPs kept) '{f.Filename}'");
                     continue;
+                }
+                if (isAssembly && f.IsRoot)
+                {
+                    LogWalk($"  ExportStep[{i + 1}/{inputs.Count}] root assembly is small " +
+                            $"({geometryCount} geometry files < {RootAssemblyStepMaxParts}) — exporting root STEP");
                 }
 
                 progress?.Invoke(i + 1, inputs.Count, f.Filename);
