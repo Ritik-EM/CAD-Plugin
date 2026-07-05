@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{C7E0C7E0-1111-2222-3333-C7E0C7E0C7E0}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>AtlasCreoSpike</RootNamespace>
+    <AssemblyName>AtlasCreoSpike</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <!-- Microsoft.CSharp is required for `dynamic` (late-bound COM calls). -->
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+  <!--
+    ====================================================================
+    Creo VB API COM reference (pfcls)  -  REQUIRED. Add it once in VS:
+
+      Solution Explorer > right-click this project > Add > COM Reference
+        > tick "pfcls"  (the Creo VB API type library; it only appears
+          after Creo 10 is installed with the "VB API for Creo
+          Parametric" feature checked)
+        > OK
+
+    Visual Studio injects a <COMReference Include="pfcls"> item and
+    generates the interop automatically. Like the CATIA/NX projects,
+    this will NOT compile until that CAD-side reference resolves.
+    ====================================================================
+  -->
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
