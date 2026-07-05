@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{A0A0A0A0-1111-2222-3333-C7E0C7E0ADD1}</ProjectGuid>
+    <!-- WinExe: the Creo VB API is async, so this is a standalone app that attaches
+         to a running Creo session and shows the shared WinForms flows (not an
+         in-process DLL like the CATIA/NX add-ins). -->
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>AtlasCadPlugin.Creo</RootNamespace>
+    <AssemblyName>AtlasCreoAddin</AssemblyName>
+    <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <!-- Microsoft.CSharp only needed if any late-bound (dynamic) calls are added. -->
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>..\packages\Newtonsoft.Json.13.0.3\lib\net45\Newtonsoft.Json.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
+  <!--
+    ====================================================================
+    Creo VB API COM reference (pfcls) — REQUIRED, add once in VS on a
+    machine with a COMMERCIAL Creo seat (the Educational Edition omits it):
+      right-click project ▸ Add ▸ COM Reference ▸ tick "pfcls" ▸ OK.
+    Won't compile until this resolves (same as the CATIA/NX projects need
+    their CAD installed).
+    ====================================================================
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\AtlasCadCore\AtlasCadCore.csproj">
+      <Project>{C0C0C0C0-1111-2222-3333-444444444444}</Project>
+      <Name>AtlasCadCore</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="CreoAdapter.cs" />
+    <Compile Include="CreoAddin.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
