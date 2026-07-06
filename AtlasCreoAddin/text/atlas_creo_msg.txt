@@ -1,0 +1,42 @@
+#
+#
+USER#Atlas#Upload
+Upload to Atlas
+#
+#
+USER#Atlas#Upload#Help
+Upload the active assembly (root + all parts) to the Atlas part-master library
+#
+#
+USER#Atlas#Browse
+Browse / Check Out
+#
+#
+USER#Atlas#Browse#Help
+Browse the Atlas library and check out an assembly for editing
+#
+#
+USER#Atlas#Checkin
+Check In
+#
+#
+USER#Atlas#Checkin#Help
+Save and check the active assembly back into Atlas as a new version
+#
+#
+USER#Atlas#Release
+Release Part Code
+#
+#
+USER#Atlas#Release#Help
+Release a reserved Atlas part code
+#
+#
+USER#Atlas#Signout
+Sign Out
+#
+#
+USER#Atlas#Signout#Help
+Sign out of Atlas on this machine
+#
+#

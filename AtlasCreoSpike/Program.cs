@@ -27,6 +27,11 @@ namespace AtlasCreoSpike
         private static StreamWriter _log;
         private static readonly Assembly Pfc = typeof(CCpfcAsyncConnection).Assembly;
 
+        // Hold the async connection so we can Disconnect() cleanly on exit. Killing
+        // the client without disconnecting leaves Creo's async channel half-open and
+        // the NEXT Connect() faults with RPC_E_SERVERFAULT (0x80010105).
+        private static dynamic _conn;
+
         [STAThread]
         private static int Main()
         {
@@ -42,7 +47,7 @@ namespace AtlasCreoSpike
 
             dynamic active = ShowActiveModel(session);
             ListModels(session);
-            if (active != null) WalkTree(active);
+            if (active != null) WalkTree(session, active);
             if (active != null) ExportStep(active);
 
             Finish();
@@ -73,6 +78,7 @@ namespace AtlasCreoSpike
                     dynamic conn = connClass.Connect(a[0], a[1], a[2], a[3]);
                     if (conn == null) continue;
                     dynamic session = conn.Session;
+                    _conn = conn;   // keep for a clean Disconnect() in Finish()
                     Log("    connected - session acquired.");
                     return session;
                 }
@@ -126,16 +132,21 @@ namespace AtlasCreoSpike
         }
 
         // [4] Recursive component walk - core of WalkAssembly ------------------
-        private static void WalkTree(dynamic active)
+        // Mirrors CreoAdapter.WalkComponents EXACTLY: reach each child model through
+        // component.ModelDescr -> session.GetModelFromDescr (NOT ComponentPath), and
+        // print the on-disk path bits the adapter relies on (Descr.Path + Origin).
+        private static void WalkTree(dynamic session, dynamic active)
         {
             Log("");
-            Log("[4] Assembly tree (recursive component walk):");
-            Log("    " + Try(() => (string)active.FileName));
-            try { WalkInto(active, active, new List<int>(), 1); }
+            Log("[4] Assembly tree (ModelDescr-based walk - mirrors CreoAdapter):");
+            Log("    " + Try(() => (string)active.FileName)
+                + "  dir=" + Try(() => (string)active.Descr.Path)
+                + "  origin=" + Try(() => (string)active.Origin));
+            try { WalkInto(session, active, 1); }
             catch (Exception ex) { Log("    walk failed: " + ex.Message); DumpPfcInterface("solid", "componentfeat"); }
         }
 
-        private static void WalkInto(dynamic root, dynamic asm, List<int> path, int depth)
+        private static void WalkInto(dynamic session, dynamic asm, int depth)
         {
             // ListFeaturesByType(visibleOnly, featType) - argument order varies by
             // version, so try both before giving up.
@@ -160,30 +171,32 @@ namespace AtlasCreoSpike
             int n = (int)feats.Count;
             for (int i = 0; i < n; i++)
             {
-                dynamic feat = feats.Item(i);
-                int id;
-                try { id = (int)feat.Id; } catch { continue; }
+                dynamic comp = feats.Item(i);
 
-                var childPath = new List<int>(path) { id };
-                dynamic leaf;
-                try
+                // Reach the child model through the component's descriptor.
+                dynamic descr;
+                try { descr = comp.ModelDescr; }
+                catch (Exception ex) { Log(Indent(depth) + "- <comp " + i + "> ModelDescr failed: " + ex.Message); continue; }
+                if (descr == null) { Log(Indent(depth) + "- <comp " + i + "> null descriptor"); continue; }
+
+                dynamic leaf = null;
+                try { leaf = session.GetModelFromDescr(descr); } catch { }
+                if (leaf == null) { try { leaf = session.RetrieveModel(descr); } catch { } }
+                if (leaf == null)
                 {
-                    dynamic ids = MakeIntSeq(childPath);
-                    dynamic cpClass = NewPfc("componentpath");
-                    dynamic compPath = cpClass.Create(root, ids);
-                    leaf = compPath.Leaf;
-                }
-                catch (Exception ex)
-                {
-                    Log(Indent(depth) + "- <comp id " + id + "> (leaf resolve failed: " + ex.Message + ")");
+                    Log(Indent(depth) + "- <comp " + i + "> leaf NOT resolved (GetModelFromDescr + RetrieveModel both failed)");
+                    if (depth == 1 && i == 0) { DumpPfcInterface("componentfeat", "modeldescriptor"); }
                     continue;
                 }
 
                 string name = Try(() => (string)leaf.FileName);
-                Log(Indent(depth) + "- " + name);
+                int type = -1; try { type = (int)leaf.Type; } catch { }
+                string dir = Try(() => (string)leaf.Descr.Path);
+                string origin = Try(() => (string)leaf.Origin);
+                Log(Indent(depth) + "- " + name + "  (type " + type + ")  dir=" + dir + "  origin=" + origin);
 
-                if (name != null && name.EndsWith(".asm", StringComparison.OrdinalIgnoreCase))
-                    WalkInto(root, leaf, childPath, depth + 1);
+                if (type == 0)   // EpfcMDL_ASSEMBLY -> recurse
+                    WalkInto(session, leaf, depth + 1);
             }
         }
 
@@ -330,6 +343,14 @@ namespace AtlasCreoSpike
 
         private static void Finish()
         {
+            // Detach from Creo WITHOUT ending its process (Disconnect, not End). This
+            // frees the async channel so the next run can Connect() again.
+            try
+            {
+                if (_conn != null) { _conn.Disconnect(2); Log(""); Log("Disconnected cleanly from Creo."); }
+            }
+            catch (Exception ex) { Log("disconnect failed (non-fatal): " + ex.Message); }
+
             Log("");
             Log("=== spike done - paste this log (or " + Path.Combine(Path.GetTempPath(), "creo_spike.log") + ") back to continue ===");
             _log?.Flush();

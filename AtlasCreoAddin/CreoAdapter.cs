@@ -99,7 +99,7 @@ namespace AtlasCadPlugin.Creo
                 for (int i = 0; i < total; i++)   // Creo sequences are 0-based (CATIA was 1-based)
                 {
                     IpfcModel m;
-                    try { m = models.Item(i); }
+                    try { m = models[i]; }
                     catch (Exception ex) { LogWalk($"  model[{i}] item threw: {ex.Message}"); continue; }
                     if (SaveOneIfModified(m)) saved++;
                 }
@@ -120,7 +120,12 @@ namespace AtlasCadPlugin.Creo
             // only when needed). Save() itself is the important part.
             try
             {
-                m.Save();   // VERIFY (t-pfcModel-Model.html): Save() signature/void
+                // Gate on IsModified so untouched models don't get a new on-disk version
+                // (confirmed property: IpfcModel.IsModified).
+                bool modified = true;
+                try { modified = m.IsModified; } catch { }
+                if (!modified) return false;
+                m.Save();
                 LogWalk($"  saved '{ModelFileName(m)}'");
                 return true;
             }
@@ -219,16 +224,17 @@ namespace AtlasCadPlugin.Creo
             {
                 IpfcComponentFeat comp;
                 // components.Item(i) -> IpfcComponentFeat (pfcAssembliesExamples.vb).
-                try { comp = (IpfcComponentFeat)comps.Item(i); }
+                try { comp = (IpfcComponentFeat)comps[i]; }
                 catch { continue; }
                 if (comp == null) continue;
 
                 // Skip suppressed/unregenerated components.
                 try
                 {
-                    // VERIFY (t-pfcFeature-FeatureStatus.html): Status == EpfcFEAT_SUPPRESSED etc.
-                    EpfcFeatureStatus st = comp.Status;
-                    if (st != EpfcFeatureStatus.EpfcFEAT_ACTIVE)
+                    // Status lives on IpfcFeature (IpfcComponentFeat inherits it, but the
+                    // interop doesn't model that inheritance — cast). Returns an int code.
+                    int st = ((IpfcFeature)comp).Status;
+                    if (st != (int)EpfcFeatureStatus.EpfcFEAT_ACTIVE)
                     {
                         LogWalk($"  comp[{i}] status={st} — recorded as skip, not recursed");
                         output.Add(SkipNode(parentPn, "suppressed"));
@@ -366,8 +372,8 @@ namespace AtlasCadPlugin.Creo
                     flags.AsSolids = true;   // VERIFY: property vs SetAsSolids(true)
                     IpfcSTEP3DExportInstructions instr =
                         new CCpfcSTEP3DExportInstructions().Create(
-                            EpfcAssemblyConfiguration.EpfcEXPORT_ASM_SINGLE_FILE, flags);
-                    src.Export(stepPath, instr);
+                            (int)EpfcAssemblyConfiguration.EpfcEXPORT_ASM_SINGLE_FILE, flags);
+                    src.Export(stepPath, (IpfcExportInstructions)instr);
                     ok = File.Exists(stepPath);
                 }
                 catch (Exception ex) { LogWalk($"  Export '{f.Filename}' failed: {ex.Message}"); }
@@ -423,8 +429,15 @@ namespace AtlasCadPlugin.Creo
             try
             {
                 string newName = Path.GetFileNameWithoutExtension(nativeOutPathHint);
+                // Session.ImportNewModel(file, importFormat, newModelType, newName, filter).
+                // A STEP file can land as a part or an assembly; GetImportSourceType reports
+                // which so we create the right model type.
+                int importFormat = (int)EpfcNewModelImportType.EpfcIMPORT_NEW_STEP;
+                int newModelType;
+                try { newModelType = _session.GetImportSourceType(stpPath, importFormat); }
+                catch { newModelType = (int)EpfcModelType.EpfcMDL_PART; }
                 IpfcModel imported =
-                    _session.ImportNewModel(stpPath, EpfcNewModelImportType.EpfcIMPORT_STEP, newName, null);
+                    _session.ImportNewModel(stpPath, importFormat, newModelType, newName, null);
                 if (imported == null)
                     throw new InvalidOperationException($"Creo could not import STEP '{stpPath}'");
 
@@ -470,7 +483,7 @@ namespace AtlasCadPlugin.Creo
             for (int i = 0; i < count; i++)
             {
                 IpfcComponentFeat comp; IpfcModelDescriptor descr;
-                try { comp = (IpfcComponentFeat)comps.Item(i); descr = comp.ModelDescr; } catch { continue; }
+                try { comp = (IpfcComponentFeat)comps[i]; descr = comp.ModelDescr; } catch { continue; }
                 if (descr == null) continue;
 
                 IpfcModel leaf = null;
@@ -553,12 +566,13 @@ namespace AtlasCadPlugin.Creo
                 //   if (v.discr == EpfcPARAM_STRING) return v.StringValue;
                 var owner = model as IpfcParameterOwner;
                 if (owner == null) return null;
-                IpfcParameter p = owner.GetParam(key);
+                IpfcParameter p = owner.GetParam(key);   // null if absent
                 if (p == null) return null;
-                IpfcParamValue v = p.Value;
+                // Value is declared on IpfcBaseParameter; the interop doesn't surface that
+                // inheritance on IpfcParameter, so cast. discr is an int discriminator.
+                IpfcParamValue v = ((IpfcBaseParameter)p).Value;
                 if (v == null) return null;
-                // VERIFY: discriminator + string accessor names.
-                if (v.discr == EpfcParamValueType.EpfcPARAM_STRING) return v.StringValue;
+                if (v.discr == (int)EpfcParamValueType.EpfcPARAM_STRING) return v.StringValue;
                 return null;
             }
             catch { return null; }
@@ -574,7 +588,7 @@ namespace AtlasCadPlugin.Creo
 
         private static bool ModelIsAssembly(IpfcModel m)
         {
-            try { return m.Type == EpfcModelType.EpfcMDL_ASSEMBLY; }   // confirmed (pfcAssembliesExamples.vb)
+            try { return m.Type == (int)EpfcModelType.EpfcMDL_ASSEMBLY; }   // Type is an int code
             catch
             {
                 string f = ModelFileName(m);
@@ -596,17 +610,19 @@ namespace AtlasCadPlugin.Creo
             if (m == null) return null;
             try
             {
-                // VERIFY (vbapidoc: t-pfcModel-ModelDescriptor.html, t-pfcModel-Model.html):
-                //   IpfcModelDescriptor d = m.GetDescr();
-                //   string dir = d.GetPath();       // may be null until saved
-                //   string file = m.FileName;       // "top.asm" (no version)
-                // Some interops expose m.GetOrigin() (full path last retrieved from) —
-                // prefer it if present.
-                IpfcModelDescriptor d = m.GetDescr();
+                // Descr.Path is the directory (blank until the model is saved); FileName is
+                // "top.asm" (no version). If the descriptor path is blank, fall back to
+                // Origin — the full path the model was last retrieved from.
+                IpfcModelDescriptor d = m.Descr;
                 string dir = null;
-                try { dir = d?.GetPath(); } catch { }
+                try { dir = d?.Path; } catch { }
                 string file = ModelFileName(m);
-                if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(file)) return null;
+                if (string.IsNullOrEmpty(dir) || string.IsNullOrEmpty(file))
+                {
+                    try { string origin = m.Origin; if (!string.IsNullOrEmpty(origin)) return origin; }
+                    catch { }
+                    return null;
+                }
                 return NewestVersionedFile(dir, file);
             }
             catch { return null; }

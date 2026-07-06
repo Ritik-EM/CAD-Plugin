@@ -46,13 +46,19 @@
   </ItemGroup>
   <!--
     ====================================================================
-    Creo VB API COM reference (pfcls) — REQUIRED, add once in VS on a
-    machine with a COMMERCIAL Creo seat (the Educational Edition omits it):
-      right-click project ▸ Add ▸ COM Reference ▸ tick "pfcls" ▸ OK.
-    Won't compile until this resolves (same as the CATIA/NX projects need
-    their CAD installed).
+    Creo VB API interop (pfcls). Interop.pfcls.dll is generated from the
+    installed Creo's COM server (pfclscom.exe) via TlbImp and checked in
+    under ..\lib (see AtlasCreoSpike.csproj for the exact command). No
+    manual VS "Add COM Reference" step is needed anymore.
     ====================================================================
   -->
+  <ItemGroup>
+    <Reference Include="Interop.pfcls">
+      <HintPath>..\lib\Interop.pfcls.dll</HintPath>
+      <EmbedInteropTypes>False</EmbedInteropTypes>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\AtlasCadCore\AtlasCadCore.csproj">
       <Project>{C0C0C0C0-1111-2222-3333-444444444444}</Project>
@@ -63,6 +69,15 @@
     <Compile Include="CreoAdapter.cs" />
     <Compile Include="CreoAddin.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <!-- Button label/tooltip message file, copied next to the exe under text\ so
+       Creo can resolve the Designate() message keys. The one-time-generated
+       toolkitribbonui.rbn (ribbon layout) also lives in that text\ folder. -->
+  <ItemGroup>
+    <Content Include="text\atlas_creo_msg.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>text\atlas_creo_msg.txt</Link>
+    </Content>
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

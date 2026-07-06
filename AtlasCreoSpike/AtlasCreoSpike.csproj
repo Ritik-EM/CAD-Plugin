@@ -37,19 +37,21 @@
   </ItemGroup>
   <!--
     ====================================================================
-    Creo VB API COM reference (pfcls)  -  REQUIRED. Add it once in VS:
-
-      Solution Explorer > right-click this project > Add > COM Reference
-        > tick "pfcls"  (the Creo VB API type library; it only appears
-          after Creo 10 is installed with the "VB API for Creo
-          Parametric" feature checked)
-        > OK
-
-    Visual Studio injects a <COMReference Include="pfcls"> item and
-    generates the interop automatically. Like the CATIA/NX projects,
-    this will NOT compile until that CAD-side reference resolves.
+    Creo VB API interop (pfcls). Interop.pfcls.dll is generated from the
+    installed Creo's COM server (pfclscom.exe) via TlbImp:
+      tlbimp "<CreoCommon>\x86e_win64\obj\pfclscom.exe" \
+        /out:lib\Interop.pfcls.dll /namespace:pfcls /machine:Agnostic
+    Checked in under ..\lib so the build no longer needs a manual VS
+    "Add COM Reference" step. Regenerate if the Creo version changes.
     ====================================================================
   -->
+  <ItemGroup>
+    <Reference Include="Interop.pfcls">
+      <HintPath>..\lib\Interop.pfcls.dll</HintPath>
+      <EmbedInteropTypes>False</EmbedInteropTypes>
+      <Private>True</Private>
+    </Reference>
+  </ItemGroup>
   <ItemGroup>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
