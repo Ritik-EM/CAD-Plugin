@@ -42,8 +42,16 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repoRoot = Split-Path -Parent $PSScriptRoot          # ..\ from installer\
-$interopPath = Join-Path $repoRoot 'lib\Interop.pfcls.dll'
+
+# The interop can live in two layouts:
+#   - DISTRIBUTION: Interop.pfcls.dll sits NEXT TO this script (inside the unzipped
+#     package). Present already, so TlbImp / the Windows SDK is NOT needed here.
+#   - REPO/DEV: generated into ..\lib\Interop.pfcls.dll (built via TlbImp on first run).
+$interopLocal = Join-Path $PSScriptRoot 'Interop.pfcls.dll'
+$interopRepo  = Join-Path (Split-Path -Parent $PSScriptRoot) 'lib\Interop.pfcls.dll'
+if     (Test-Path $interopLocal) { $interopPath = $interopLocal }  # distribution
+elseif (Test-Path $interopRepo)  { $interopPath = $interopRepo }   # repo (already built)
+else                             { $interopPath = $interopRepo }   # repo (will TlbImp here)
 
 function Assert-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()

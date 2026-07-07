@@ -177,6 +177,17 @@ namespace AtlasCadCore.Forms
 
                     var byPart = BuildPerPartEntries(native, steps);
 
+                    // Creo stores files with an on-disk version suffix
+                    // (asm0002.asm.2) while the canonical name is version-free
+                    // (asm0002.asm). The upload manifest declares the canonical
+                    // name, but staging names each S3 object after its on-disk
+                    // file — so the backend can't find the native and 3d_raw
+                    // stays null. Stage a canonical-named copy so the manifest,
+                    // the staged object, and the stored key all agree (and the
+                    // stored native isn't version-suffixed). No-op for CADs whose
+                    // on-disk name already matches (SolidWorks/CATIA).
+                    NormalizeNativeFilenames(byPart, stepDir);
+
                     // P7.49: emit tree.json for every assembly entry so
                     // checkout can pre-download children. Required for
                     // R2025 broken-ref handling.
@@ -218,11 +229,14 @@ namespace AtlasCadCore.Forms
 
                     if (stillMissing.Count > 0)
                     {
+                        LogUpload($"MISSING-FLOW: stillMissing={stillMissing.Count} — hiding progress + opening MissingPartsTableForm");
                         progress.Hide();
                         var pickedExistingRemap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                         using (var dlg = new MissingPartsTableForm(api, stillMissing))
                         {
+                            LogUpload("MISSING-FLOW: ShowDialog() begin");
                             dlg.ShowDialog();
+                            LogUpload("MISSING-FLOW: ShowDialog() returned");
                             // Either OK (Continue) or Cancel (Skip All) — we honour
                             // each row's PickedPartNumber regardless; rows without a
                             // pick are treated as "skip".
@@ -241,15 +255,37 @@ namespace AtlasCadCore.Forms
                                 }
                             }
                         }
+                        LogUpload($"MISSING-FLOW: picks={pickedExistingRemap.Count} skipped={skipped} — re-showing progress");
                         progress.Show();
 
                         if (pickedExistingRemap.Count > 0)
                         {
+                            // The tree manifests were written during the walk with the
+                            // pre-pick placeholder part numbers. Rewrite them to the
+                            // final picked/resolved numbers so the backend can link the
+                            // picked parts into the assembly (nodes keyed by the OLD
+                            // placeholder won't resolve). Keyed by OriginalPartNumber,
+                            // which is what the manifest nodes carry.
+                            var finalRemap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                            foreach (var e in byPart)
+                            {
+                                string finalPn = pickedExistingRemap.TryGetValue(e.PartNumber, out var pk)
+                                    ? pk : e.PartNumber;
+                                if (!string.IsNullOrEmpty(e.OriginalPartNumber))
+                                    finalRemap[e.OriginalPartNumber] = finalPn;
+                            }
+                            var rewrittenTrees = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            foreach (var e in byPart)
+                                if (!string.IsNullOrEmpty(e.TreePath) && rewrittenTrees.Add(e.TreePath))
+                                    RewriteTreeManifest(e.TreePath, finalRemap);
+
                             var subset = byPart
                                 .Where(e => pickedExistingRemap.ContainsKey(e.PartNumber))
                                 .Select(e => e.WithPartNumber(pickedExistingRemap[e.PartNumber]))
                                 .ToList();
+                            LogUpload($"MISSING-FLOW: second-pass subset={subset.Count} — SetPhase then UploadPartMasterAsync");
                             progress.SetPhase($"Uploading {subset.Count} file(s) against existing part_numbers…");
+                            LogUpload("MISSING-FLOW: second-pass UploadPartMasterAsync begin");
                             var pass = await api.UploadPartMasterAsync(
                                 tree: subset.Select(e => (object)e.ToUploadJson()),
                                 filePaths: subset.SelectMany(e => e.AllPaths()));
@@ -434,6 +470,22 @@ namespace AtlasCadCore.Forms
                 LogUpload($"  MISSING (not released on atlas) pn='{m.part_number}' file='{m.filename ?? "-"}'");
             foreach (var nr in r.new_revisions ?? new List<UploadAttachedDto>())
                 LogUpload($"  NEW REVISION pn='{nr.part_number}' (demoted '{nr.previous_part_number ?? "-"}')");
+
+            var ai = r.assembly_ingest;
+            if (ai == null)
+                LogUpload("  ASSEMBLY-INGEST: (backend returned none)");
+            else
+            {
+                LogUpload($"  ASSEMBLY-INGEST source='{ai.source ?? "-"}' created={ai.created} updated={ai.updated}" +
+                          (string.IsNullOrEmpty(ai.error) ? "" : $" ERROR='{ai.error}'"));
+                if (ai.skipped != null && ai.skipped.Count > 0)
+                    LogUpload($"    skipped (unresolved part_number): {string.Join(", ", ai.skipped)}");
+                if (ai.missing_parts != null && ai.missing_parts.Count > 0)
+                    LogUpload($"    missing_parts: {string.Join(", ", ai.missing_parts)}");
+                foreach (var t in ai.trees ?? new List<AssemblyIngestTreeDto>())
+                    LogUpload($"    tree s3_key='{t.s3_key}' root='{t.root_part_number ?? "-"}'" +
+                              (string.IsNullOrEmpty(t.error) ? "" : $" ERROR='{t.error}'"));
+            }
         }
 
         private static void EnsurePlaceholderPartNumbers(List<AssemblyFileRef> entries)
@@ -505,6 +557,34 @@ namespace AtlasCadCore.Forms
         /// upload session ships the file alongside the native/step; backend
         /// classifies *.json into reference_documents.tree.
         /// </summary>
+        // Rewrite a staged tree.json in place, remapping root_part_number and every
+        // node's part_number / parent_part_number through `remap`. Used after the
+        // missing-parts picks so the uploaded manifest carries the final part numbers.
+        private static void RewriteTreeManifest(string treePath, Dictionary<string, string> remap)
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(treePath) || !File.Exists(treePath) || remap == null) return;
+                var root = Newtonsoft.Json.Linq.JObject.Parse(File.ReadAllText(treePath));
+                string Map(string pn) =>
+                    (!string.IsNullOrEmpty(pn) && remap.TryGetValue(pn, out var v)) ? v : pn;
+
+                if (root["root_part_number"] != null)
+                    root["root_part_number"] = Map((string)root["root_part_number"]);
+                if (root["nodes"] is Newtonsoft.Json.Linq.JArray nodes)
+                {
+                    foreach (var n in nodes.OfType<Newtonsoft.Json.Linq.JObject>())
+                    {
+                        if (n["part_number"] != null) n["part_number"] = Map((string)n["part_number"]);
+                        if (n["parent_part_number"] != null) n["parent_part_number"] = Map((string)n["parent_part_number"]);
+                    }
+                }
+                File.WriteAllText(treePath, root.ToString());
+                LogUpload($"TREE-REWRITE: {Path.GetFileName(treePath)} remapped to final part numbers");
+            }
+            catch (Exception ex) { LogUpload($"TREE-REWRITE failed for {treePath}: {ex.Message}"); }
+        }
+
         private static void AttachTreeManifests(
             List<PartEntry> byPart, List<AssemblyFileRef> native, string stageDir)
         {
@@ -577,6 +657,45 @@ namespace AtlasCadCore.Forms
             }
         }
 
+        // Ensure each entry's native/companion file is staged under its canonical
+        // filename (the one the manifest declares), not its on-disk name. Only
+        // copies when the two differ (i.e. Creo's version-suffixed files); a plain
+        // rename would mutate the user's working files, so we copy into stageDir.
+        private static void NormalizeNativeFilenames(List<PartEntry> byPart, string stageDir)
+        {
+            if (byPart == null) return;
+            foreach (var e in byPart)
+            {
+                e.NativePath = EnsureNamedCopy(e.NativePath, e.NativeFilename, stageDir);
+                for (int i = 0; i < e.CompanionPaths.Count; i++)
+                {
+                    string name = i < e.CompanionFilenames.Count ? e.CompanionFilenames[i] : null;
+                    e.CompanionPaths[i] = EnsureNamedCopy(e.CompanionPaths[i], name, stageDir);
+                }
+            }
+        }
+
+        private static string EnsureNamedCopy(string path, string desiredName, string stageDir)
+        {
+            if (string.IsNullOrEmpty(path) || string.IsNullOrEmpty(desiredName) || !File.Exists(path))
+                return path;
+            if (string.Equals(Path.GetFileName(path), desiredName, StringComparison.OrdinalIgnoreCase))
+                return path;   // already canonical (SolidWorks/CATIA)
+            try
+            {
+                Directory.CreateDirectory(stageDir);
+                string dest = Path.Combine(stageDir, desiredName);
+                File.Copy(path, dest, overwrite: true);
+                LogUpload($"NORMALIZE: staged '{Path.GetFileName(path)}' as canonical '{desiredName}'");
+                return dest;
+            }
+            catch (Exception ex)
+            {
+                LogUpload($"NORMALIZE: copy '{path}' -> '{desiredName}' failed: {ex.Message}");
+                return path;   // fall back to the on-disk (version-suffixed) name
+            }
+        }
+
         private static List<PartEntry> BuildPerPartEntries(
             List<AssemblyFileRef> native, List<AssemblyFileRef> steps)
         {
@@ -598,11 +717,12 @@ namespace AtlasCadCore.Forms
                     entry = new PartEntry
                     {
                         PartNumber = n.PartNumber,
+                        OriginalPartNumber = n.PartNumber,
                         NativeFilename = n.Filename,
                         NativePath = n.FullPath,
                         StepFilename = step?.Filename,
                         StepPath = step?.FullPath,
-                        DetectedDescription = null,
+                        DetectedDescription = n.Description,
                     };
                     byPart[n.PartNumber] = entry;
                     result.Add(entry);
@@ -629,6 +749,11 @@ namespace AtlasCadCore.Forms
         private class PartEntry
         {
             public string PartNumber;
+            // The part number this entry had when the tree manifest was written
+            // (before Atlas resolution / the missing-parts picks). The tree.json
+            // nodes are keyed by it, so it's the key we remap when rewriting the
+            // manifest to the final picked/resolved numbers.
+            public string OriginalPartNumber;
             public string NativeFilename;
             public string NativePath;
             public string StepFilename;
@@ -665,6 +790,7 @@ namespace AtlasCadCore.Forms
             public PartEntry WithPartNumber(string newPn) => new PartEntry
             {
                 PartNumber = newPn,
+                OriginalPartNumber = OriginalPartNumber,
                 NativeFilename = NativeFilename,
                 NativePath = NativePath,
                 StepFilename = StepFilename,

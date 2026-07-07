@@ -21,11 +21,21 @@ namespace AtlasCadCore.ApiClient
     public class AtlasApiClient
     {
         private static readonly HttpClient _http = CreateHttpClient();
-        private static readonly HttpClient _s3Http = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+        private static readonly HttpClient _s3Http = new HttpClient(NoProxyHandler()) { Timeout = TimeSpan.FromMinutes(30) };
+
+        // On .NET Framework the FIRST request on an HttpClient resolves the WinINET
+        // proxy — including WPAD "Automatically detect settings" — SYNCHRONOUSLY on the
+        // calling thread. The CAD upload/checkin flows run on the UI thread, so with WPAD
+        // enabled (the Windows default) that first call to Atlas froze the app
+        // ("Not Responding", e.g. at "Resolving part_numbers…") while it hunted for a
+        // non-existent wpad host. Atlas + S3 are direct-access (CloudFront/AWS), so we
+        // never need a proxy — disable it and the stall is gone.
+        private static HttpClientHandler NoProxyHandler() =>
+            new HttpClientHandler { UseProxy = false, Proxy = null };
 
         private static HttpClient CreateHttpClient()
         {
-            var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+            var http = new HttpClient(NoProxyHandler()) { Timeout = TimeSpan.FromMinutes(5) };
             string ver = PluginVersion.Current?.ToString(3) ?? "dev";
             // No CAD name here — the host is identified per-request by the
             // X-Atlas-Cad-Source header (NewRequest), so the shared static client

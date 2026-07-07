@@ -151,12 +151,15 @@ namespace AtlasCadCore.Forms
                         foreach (var rev in kv.Value ?? new List<PartMasterRevisionDto>())
                         {
                             if (rev?.part_number == null) continue;
-                            if (rev.active != true) continue;          // pick from active revisions only
+                            // Show every part number the search returns, regardless of
+                            // revision state (active, PENDING_PREPARATION, etc.). The
+                            // status is surfaced in the Release column so the user can
+                            // still tell which revisions are live.
                             _rows.Add(new Row
                             {
                                 PartNumber = rev.part_number,
                                 Description = d.description ?? "",
-                                ReleaseType = kv.Key,
+                                ReleaseType = rev.active == true ? kv.Key : $"{kv.Key} ({rev.status ?? "inactive"})",
                                 GroupLabel = $"{d.major_group}/{d.minor_group}",
                             });
                         }

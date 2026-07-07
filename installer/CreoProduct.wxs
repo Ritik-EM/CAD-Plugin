@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AtlasCadPlugin (Creo Parametric) MSI installer (WiX v3 toolset).
+
+  Mirrors AltiumProduct.wxs (a standalone .exe, not an in-process DLL), but adds the
+  ONE thing Creo needs that the others don't: a COM-registration step. Creo's VB API
+  talks over the out-of-process pfclscom.exe COM server, which a stock Creo install
+  doesn't register — so this MSI runs SetupCreoVbApi.ps1 as an ELEVATED (deferred,
+  no-impersonate) custom action during install, and -Unregister on uninstall.
+
+  Build with BuildCreoMsi.cmd, or by hand (WiX v3 on PATH, Release built):
+    cd installer
+    candle -ext WixUtilExtension CreoProduct.wxs
+    light  -ext WixUtilExtension -ext WixUIExtension CreoProduct.wixobj -out AtlasCreoPlugin.msi
+
+  What it does:
+    1. Copies the add-in (AtlasCreoAddin.exe + AtlasCadCore.dll + Interop.pfcls.dll +
+       Newtonsoft.Json.dll + text\atlas_creo_msg.txt + SetupCreoVbApi.ps1) to
+       C:\Users\Public\AtlasCreo — world-writable so Creo can save toolkitribbonui.rbn
+       into text\ during the one-time ribbon customization.
+    2. Registers the pfcls COM server for the Creo on this machine (elevated CA).
+    3. Adds Startup + Desktop shortcuts "Atlas for Creo". The add-in waits for a Creo
+       session and attaches on its own, so it auto-starts at login — no manual launch.
+
+  The ONE manual step the MSI can't do (Creo can't place ribbon buttons programmatically):
+  the user does the one-time File > Options > Customize Ribbon > add the TOOLKIT Commands
+  > Save the Auxiliary Application User Interface. (Config option tk_enable_ribbon_custom_save = yes.)
+
+  perMachine MSI: the app + COM reg are machine-wide; the Startup/Desktop shortcuts are
+  per-user components (HKCU keypath) that materialise for the INSTALLING user — the real
+  case (single-designer laptop). Same caveat as the CATIA/Altium MSIs.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
+  <Product Id="*"
+           Name="Atlas CAD Plugin for Creo"
+           Language="1033"
+           Version="1.0.0.0"
+           Manufacturer="Euler Motors"
+           UpgradeCode="7C1E9A42-3D6B-4F51-A2C8-9B0E1D2F3A4B">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Platform="x64"
+             Description="Atlas CAD integration for Creo Parametric" />
+
+    <MajorUpgrade
+        Schedule="afterInstallInitialize"
+        AllowSameVersionUpgrades="yes"
+        DowngradeErrorMessage="A newer version of Atlas CAD Plugin for Creo is already installed." />
+
+    <!-- The add-in holds its EXE/DLLs open while running, so stop it before an
+         install/upgrade. It has no normal window (tray only), and its attach/run loop
+         ignores WM_CLOSE, so a graceful close can't reach it — force-terminate. NOTE:
+         a hard stop leaves Creo's async channel half-open, so after an UPGRADE while
+         Creo is open the user should restart Creo before the add-in re-attaches. -->
+    <util:CloseApplication Id="CloseAddin"
+                           Target="AtlasCreoAddin.exe"
+                           TerminateProcess="0"
+                           RebootPrompt="no"
+                           Description="Stopping Atlas for Creo to install the update." />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Feature Id="ProductFeature" Title="AtlasCreoPlugin" Level="1">
+      <ComponentGroupRef Id="AppComponents" />
+      <ComponentGroupRef Id="TextComponents" />
+      <ComponentGroupRef Id="ShortcutComponents" />
+    </Feature>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <!-- C:\Users\Public\AtlasCreo (PUBLICFOLDER resolved to %PUBLIC% below). -->
+      <Directory Id="PUBLICFOLDER" Name="PUBLIC">
+        <Directory Id="INSTALLFOLDER" Name="AtlasCreo">
+          <Directory Id="TEXTFOLDER" Name="text" />
+        </Directory>
+      </Directory>
+      <Directory Id="StartupFolder" />
+      <Directory Id="DesktopFolder" />
+    </Directory>
+
+    <!-- Resolve PUBLICFOLDER to C:\Users\Public before directories are costed. -->
+    <SetProperty Id="PUBLICFOLDER" Value="[%PUBLIC]" Before="CostFinalize" Sequence="both" />
+
+    <!-- ── Per-machine: the add-in files (C:\Users\Public\AtlasCreo). Explicit stable
+         GUIDs because %PUBLIC%\AtlasCreo is resolved at runtime (not a standard MSI
+         folder), so WiX can't auto-generate them. Keep STABLE across versions. ── -->
+    <ComponentGroup Id="AppComponents" Directory="INSTALLFOLDER">
+      <Component Id="AddinExe" Guid="A1B2C3D4-1111-4A2B-8C3D-0E1F2A3B4C51" Win64="yes">
+        <File Id="AtlasCreoAddinExe" Source="..\AtlasCreoAddin\bin\Release\AtlasCreoAddin.exe" KeyPath="yes" />
+      </Component>
+      <Component Id="CoreDll" Guid="A1B2C3D4-2222-4A2B-8C3D-0E1F2A3B4C52" Win64="yes">
+        <File Id="AtlasCadCoreDll" Source="..\AtlasCreoAddin\bin\Release\AtlasCadCore.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="InteropDll" Guid="A1B2C3D4-3333-4A2B-8C3D-0E1F2A3B4C53" Win64="yes">
+        <File Id="InteropPfclsDll" Source="..\AtlasCreoAddin\bin\Release\Interop.pfcls.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="NewtonsoftDll" Guid="A1B2C3D4-4444-4A2B-8C3D-0E1F2A3B4C54" Win64="yes">
+        <File Id="NewtonsoftJsonDll" Source="..\AtlasCreoAddin\bin\Release\Newtonsoft.Json.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="SetupPs1" Guid="A1B2C3D4-5555-4A2B-8C3D-0E1F2A3B4C55" Win64="yes">
+        <File Id="SetupCreoVbApiPs1" Source="SetupCreoVbApi.ps1" KeyPath="yes" />
+        <RemoveFolder Id="RemoveInstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="TextComponents" Directory="TEXTFOLDER">
+      <Component Id="MsgFile" Guid="A1B2C3D4-6666-4A2B-8C3D-0E1F2A3B4C56" Win64="yes">
+        <File Id="AtlasCreoMsgTxt" Source="..\AtlasCreoAddin\bin\Release\text\atlas_creo_msg.txt" KeyPath="yes" />
+        <RemoveFolder Id="RemoveTextFolder" Directory="TEXTFOLDER" On="uninstall" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ── Per-user: Startup + Desktop shortcuts (HKCU keypath → installing user). ── -->
+    <ComponentGroup Id="ShortcutComponents">
+      <Component Id="StartupShortcut" Directory="StartupFolder"
+                 Guid="A1B2C3D4-7777-4A2B-8C3D-0E1F2A3B4C57">
+        <RegistryValue Root="HKCU" Key="Software\Atlas\CreoPlugin" Name="Startup"
+                       Type="integer" Value="1" KeyPath="yes" />
+        <Shortcut Id="AtlasCreoStartupLnk"
+                  Name="Atlas for Creo"
+                  Description="Atlas CAD plugin for Creo (waits for Creo, then attaches)"
+                  Target="[INSTALLFOLDER]AtlasCreoAddin.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveStartupFolder" Directory="StartupFolder" On="uninstall" />
+      </Component>
+      <Component Id="DesktopShortcut" Directory="DesktopFolder"
+                 Guid="A1B2C3D4-8888-4A2B-8C3D-0E1F2A3B4C58">
+        <RegistryValue Root="HKCU" Key="Software\Atlas\CreoPlugin" Name="Desktop"
+                       Type="integer" Value="1" KeyPath="yes" />
+        <Shortcut Id="AtlasCreoDesktopLnk"
+                  Name="Atlas for Creo"
+                  Description="Atlas CAD plugin for Creo"
+                  Target="[INSTALLFOLDER]AtlasCreoAddin.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveDesktopFolder" Directory="DesktopFolder" On="uninstall" />
+      </Component>
+    </ComponentGroup>
+
+    <!-- ── COM registration (elevated). Immediate CAs build the command line with the
+         resolved paths; the deferred/no-impersonate CAs run it as LocalSystem (writes
+         HKLM). 64-bit powershell (System64Folder) so HKLM writes are NOT redirected to
+         Wow6432Node. Return=ignore: the script is best-effort (its LoadTypeLibEx step
+         throws-but-completes), so a non-zero exit must not fail the whole install. ── -->
+    <CustomAction Id="SetRegisterCmd" Property="RegisterVbApi"
+        Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLFOLDER]SetupCreoVbApi.ps1&quot;" />
+    <CustomAction Id="RegisterVbApi" BinaryKey="WixCA" DllEntry="WixQuietExec64"
+        Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <CustomAction Id="SetUnregisterCmd" Property="UnregisterVbApi"
+        Value="&quot;[System64Folder]WindowsPowerShell\v1.0\powershell.exe&quot; -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File &quot;[INSTALLFOLDER]SetupCreoVbApi.ps1&quot; -Unregister" />
+    <CustomAction Id="UnregisterVbApi" BinaryKey="WixCA" DllEntry="WixQuietExec64"
+        Execute="deferred" Impersonate="no" Return="ignore" />
+
+    <InstallExecuteSequence>
+      <!-- Register after files are laid down, on install/upgrade (not on removal). -->
+      <Custom Action="SetRegisterCmd" After="InstallFiles">NOT REMOVE</Custom>
+      <Custom Action="RegisterVbApi" After="SetRegisterCmd">NOT REMOVE</Custom>
+      <!-- Unregister before files are removed, only on a real uninstall. -->
+      <Custom Action="SetUnregisterCmd" Before="RemoveFiles">REMOVE="ALL"</Custom>
+      <Custom Action="UnregisterVbApi" After="SetUnregisterCmd">REMOVE="ALL"</Custom>
+    </InstallExecuteSequence>
+
+    <UI>
+      <UIRef Id="WixUI_Minimal" />
+    </UI>
+    <WixVariable Id="WixUILicenseRtf" Value="License.rtf" />
+  </Product>
+</Wix>

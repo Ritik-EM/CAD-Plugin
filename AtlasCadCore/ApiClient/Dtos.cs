@@ -113,6 +113,7 @@ namespace AtlasCadCore.ApiClient
         public string created_by;
         public string created_at;
         public bool? active;
+        public string status;
         public ReferenceDocumentsDto reference_documents;
 
         [JsonIgnore]
@@ -177,6 +178,28 @@ namespace AtlasCadCore.ApiClient
         /// under base AH120295, demoting AH1202950A). Also included in
         /// <see cref="attached"/>; this list just lets the summary call them out.</summary>
         public List<UploadAttachedDto> new_revisions;
+        /// <summary>Result of the backend's attempt to build/update assembly
+        /// documents from the uploaded tree.json(s). Null if the backend didn't
+        /// report it.</summary>
+        public AssemblyIngestDto assembly_ingest;
+    }
+
+    public class AssemblyIngestDto
+    {
+        public string source;
+        public int created;
+        public int updated;
+        public List<string> skipped;
+        public List<string> missing_parts;
+        public string error;
+        public List<AssemblyIngestTreeDto> trees;
+    }
+
+    public class AssemblyIngestTreeDto
+    {
+        public string s3_key;
+        public string root_part_number;
+        public string error;
     }
 
     public class UploadAttachedDto

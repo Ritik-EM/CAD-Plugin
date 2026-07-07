@@ -188,6 +188,7 @@ namespace AtlasCadPlugin.Creo
                 IsRoot = true,
                 PartNumber = rootPn,
                 ParentPartNumber = null,
+                Description = PartNumberParser.DescriptionFromFilenameConvention(rootFilename),
                 NativeHandle = rootModel,
             });
             seenPaths.Add(rootPath);
@@ -288,6 +289,7 @@ namespace AtlasCadPlugin.Creo
                     IsRoot = false,
                     PartNumber = leafPn,
                     ParentPartNumber = parentPn,
+                    Description = PartNumberParser.DescriptionFromFilenameConvention(leafFile),
                     NativeHandle = leaf,
                     SkipReason = skipReason,
                 });
@@ -549,10 +551,16 @@ namespace AtlasCadPlugin.Creo
 
         private static string ResolvePartNumber(IpfcModel model, string filename)
         {
-            string fromParam = ReadModelParam(model, "PART_NUMBER");
-            if (!string.IsNullOrWhiteSpace(fromParam) && PartNumberParser.LooksValid(fromParam))
-                return fromParam.Trim().ToUpperInvariant();
-            return PartNumberParser.ParseOrNull(filename);
+            // Accept a 10-char code or an 8-char base (normalised to +"00") from the
+            // PART_NUMBER parameter. (LooksValid alone rejected 8-char bases like
+            // "TEST0005", leaving the part unresolved and breaking the tree.)
+            string fromParam = PartNumberParser.NormalizeOrNull(ReadModelParam(model, "PART_NUMBER"));
+            if (fromParam != null) return fromParam;
+            // No (valid) PART_NUMBER parameter — fall back to the filename convention
+            // "<PartNumber>_<Description>": the part number is the token before the
+            // first underscore. (ParseOrNull would misread the 8-char-base case, taking
+            // the first two description letters as a revision suffix.)
+            return PartNumberParser.PartNumberFromFilenameConvention(filename);
         }
 
         private static string ReadModelParam(IpfcModel model, string key)

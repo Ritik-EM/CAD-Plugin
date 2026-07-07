@@ -1,42 +1,40 @@
-#
-#
-USER#Atlas#Upload
+ATLAS_UPLOAD_LBL
 Upload to Atlas
-#
-#
-USER#Atlas#Upload#Help
+Upload to Atlas
+
+ATLAS_UPLOAD_HELP
 Upload the active assembly (root + all parts) to the Atlas part-master library
-#
-#
-USER#Atlas#Browse
+Upload the active assembly (root + all parts) to the Atlas part-master library
+
+ATLAS_BROWSE_LBL
 Browse / Check Out
-#
-#
-USER#Atlas#Browse#Help
+Browse / Check Out
+
+ATLAS_BROWSE_HELP
 Browse the Atlas library and check out an assembly for editing
-#
-#
-USER#Atlas#Checkin
+Browse the Atlas library and check out an assembly for editing
+
+ATLAS_CHECKIN_LBL
 Check In
-#
-#
-USER#Atlas#Checkin#Help
+Check In
+
+ATLAS_CHECKIN_HELP
 Save and check the active assembly back into Atlas as a new version
-#
-#
-USER#Atlas#Release
+Save and check the active assembly back into Atlas as a new version
+
+ATLAS_RELEASE_LBL
 Release Part Code
-#
-#
-USER#Atlas#Release#Help
+Release Part Code
+
+ATLAS_RELEASE_HELP
 Release a reserved Atlas part code
-#
-#
-USER#Atlas#Signout
+Release a reserved Atlas part code
+
+ATLAS_SIGNOUT_LBL
 Sign Out
-#
-#
-USER#Atlas#Signout#Help
+Sign Out
+
+ATLAS_SIGNOUT_HELP
 Sign out of Atlas on this machine
-#
-#
+Sign out of Atlas on this machine
+
